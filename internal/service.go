@@ -2,57 +2,47 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
+	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
+	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
+	"google.golang.org/grpc"
 )
 
-type ServiceConfig struct {
-	Name    string
-	Port    int
-	Version string
-}
-
 type Service struct {
+	pb.UnimplementedCacheServiceServer
 	Config        *ConfigBuilder.Config
-	ServiceConfig ServiceConfig
+	ProjectConfig config.ProjectConfig
 	Registry      *registry.Registry
 	Search        *search.System
-	server        *http.Server
+	grpcServer    *grpc.Server
 	selfAddress   string
 }
 
 func New(cfg *ConfigBuilder.Config) *Service {
-	return &Service{
-		Config: cfg,
-	}
-}
-
-func NewWithConfig(cfg *ConfigBuilder.Config, svcConfig ServiceConfig, searchConfig search.Config) *Service {
+	pc := config.GetProjectConfig(cfg)
 	reg := registry.New()
 
-	// Determine our own address
-	selfAddress := fmt.Sprintf(":%d", svcConfig.Port)
+	// Determine our own address using the gRPC port
+	selfAddress := fmt.Sprintf(":%d", pc.Search.Port)
 	if hostname, err := os.Hostname(); err == nil {
-		selfAddress = fmt.Sprintf("%s:%d", hostname, svcConfig.Port)
+		selfAddress = fmt.Sprintf("%s:%d", hostname, pc.Search.Port)
 	}
 
-	searchSystem := search.NewSystem(*cfg, searchConfig, reg)
+	searchSystem := search.NewSystem(pc.Search, reg)
 	searchSystem.SetSelfAddress(selfAddress)
 
 	return &Service{
 		Config:        cfg,
-		ServiceConfig: svcConfig,
+		ProjectConfig: pc,
 		Registry:      reg,
 		Search:        searchSystem,
 		selfAddress:   selfAddress,
@@ -63,27 +53,26 @@ func (s *Service) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup HTTP server
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /broadcast", s.handleBroadcast)
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/peers", s.handlePeers)
+	port := s.ProjectConfig.Search.Port
 
-	s.server = &http.Server{
-		Addr:              fmt.Sprintf(":%d", s.ServiceConfig.Port),
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
+	// Setup gRPC server
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return fmt.Errorf("failed to listen on port %d: %w", port, err)
 	}
+
+	s.grpcServer = grpc.NewServer()
+	pb.RegisterCacheServiceServer(s.grpcServer, s)
 
 	// Start the search/discovery system
 	logs.Infof("starting service discovery...")
 	s.Search.Start(ctx)
 
-	// Start HTTP server in goroutine
+	// Start gRPC server in goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		logs.Infof("starting HTTP server on port %d", s.ServiceConfig.Port)
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logs.Infof("starting gRPC server on port %d", port)
+		if err := s.grpcServer.Serve(lis); err != nil {
 			errChan <- err
 		}
 	}()
@@ -101,67 +90,31 @@ func (s *Service) Start() error {
 	}
 }
 
-func (s *Service) shutdown(ctx context.Context) error {
+func (s *Service) shutdown(_ context.Context) error {
 	// Stop the search system
 	s.Search.Stop()
 
-	// Shutdown HTTP server
-	shutdownCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	return s.server.Shutdown(shutdownCtx)
+	// Gracefully stop gRPC server
+	s.grpcServer.GracefulStop()
+	return nil
 }
 
-func (s *Service) handleBroadcast(w http.ResponseWriter, r *http.Request) {
-	response := search.BroadcastResponse{
-		Name:    s.ServiceConfig.Name,
+// Broadcast implements the gRPC Broadcast RPC
+func (s *Service) Broadcast(_ context.Context, _ *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
+	return &pb.BroadcastResponse{
+		Name:    s.ProjectConfig.Service.Name,
 		Address: s.selfAddress,
-		Version: s.ServiceConfig.Version,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		_ = logs.Errorf("error encoding broadcast response: %v", err)
-	}
+		Version: s.ProjectConfig.Service.Version,
+	}, nil
 }
 
-func (s *Service) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":        "healthy",
-		"peers":         s.Registry.Count(),
-		"healthy_peers": len(s.Registry.GetHealthy()),
-	}); err != nil {
-		_ = logs.Errorf("error encoding health response: %v", err)
-		return
-	}
-}
-
-func (s *Service) handlePeers(w http.ResponseWriter, r *http.Request) {
-	peers := s.Registry.GetAll()
-
-	type peerInfo struct {
-		Address  string    `json:"address"`
-		Name     string    `json:"name"`
-		LastSeen time.Time `json:"last_seen"`
-		Healthy  bool      `json:"healthy"`
-	}
-
-	peerList := make([]peerInfo, 0, len(peers))
-	for _, p := range peers {
-		peerList = append(peerList, peerInfo{
-			Address:  p.Address,
-			Name:     p.Name,
-			LastSeen: p.LastSeen,
-			Healthy:  p.Healthy,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	err := json.NewEncoder(w).Encode(peerList)
-	if err != nil {
-		_ = logs.Errorf("error encoding peers list: %v", err)
-	}
+// HealthCheck implements the gRPC HealthCheck RPC
+func (s *Service) HealthCheck(_ context.Context, _ *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
+	return &pb.HealthCheckResponse{
+		Healthy:          true,
+		PeerCount:        int32(s.Registry.Count()),
+		HealthyPeerCount: int32(len(s.Registry.GetHealthy())),
+	}, nil
 }
 
 // GetLocalIP attempts to determine the local IP address

@@ -3,8 +3,14 @@ module github.com/keloran/distcache
 go 1.24.0
 
 require (
+	github.com/bugfixes/go-bugfixes v0.14.1
+	github.com/keloran/go-config v1.8.0
+	google.golang.org/grpc v1.72.0
+	google.golang.org/protobuf v1.36.6
+)
+
+require (
 	github.com/Nerzal/gocloak/v13 v13.9.0 // indirect
-	github.com/bugfixes/go-bugfixes v0.14.1 // indirect
 	github.com/caarlos0/env/v8 v8.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.1 // indirect
@@ -26,7 +32,6 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.8.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/keloran/go-config v1.8.0 // indirect
 	github.com/keloran/vault-helper v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
@@ -46,6 +51,8 @@ require (
 	golang.org/x/crypto v0.43.0 // indirect
 	golang.org/x/net v0.45.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 )

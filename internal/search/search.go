@@ -2,59 +2,32 @@ package search
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
+	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
-	ConfigBuilder "github.com/keloran/go-config"
+	pb "github.com/keloran/distcache/proto/cache"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-type Config struct {
-	ServiceName  string        // e.g., "cacheservice"
-	Domains      []string      // e.g., [".internal", ".local"]
-	Port         int           // port to check for broadcast endpoint
-	ScanInterval time.Duration // how often to scan for new peers
-	Timeout      time.Duration // HTTP timeout for broadcast requests
-	MaxInstances int           // max instance number to try (e.g., cacheservice-1, cacheservice-2, etc.)
-}
-
 type System struct {
-	AppConfig    ConfigBuilder.Config
-	SearchConfig Config
-	Registry     *registry.Registry
-	selfAddress  string
-	stopChan     chan struct{}
-	wg           sync.WaitGroup
+	Config      config.SearchConfig
+	Registry    *registry.Registry
+	selfAddress string
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
 }
 
-type BroadcastResponse struct {
-	Name    string `json:"name"`
-	Address string `json:"address"`
-	Version string `json:"version,omitempty"`
-}
-
-func DefaultConfig() Config {
-	return Config{
-		ServiceName:  "cacheservice",
-		Domains:      []string{".internal"},
-		Port:         8080,
-		ScanInterval: 30 * time.Second,
-		Timeout:      5 * time.Second,
-		MaxInstances: 100,
-	}
-}
-
-func NewSystem(config ConfigBuilder.Config, searchConfig Config, reg *registry.Registry) *System {
+func NewSystem(cfg config.SearchConfig, reg *registry.Registry) *System {
 	return &System{
-		AppConfig:    config,
-		SearchConfig: searchConfig,
-		Registry:     reg,
-		stopChan:     make(chan struct{}),
+		Config:   cfg,
+		Registry: reg,
+		stopChan: make(chan struct{}),
 	}
 }
 
@@ -78,7 +51,7 @@ func (s *System) discoveryLoop(ctx context.Context) {
 	// Initial discovery
 	s.FindOthers(ctx)
 
-	ticker := time.NewTicker(s.SearchConfig.ScanInterval)
+	ticker := time.NewTicker(s.Config.ScanInterval)
 	defer ticker.Stop()
 
 	for {
@@ -97,20 +70,20 @@ func (s *System) discoveryLoop(ctx context.Context) {
 func (s *System) FindOthers(ctx context.Context) {
 	var wg sync.WaitGroup
 
-	for _, domain := range s.SearchConfig.Domains {
+	for _, domain := range s.Config.Domains {
 		// Try base service name (e.g., cacheservice.internal)
 		wg.Add(1)
 		go func(d string) {
 			defer wg.Done()
-			s.probeService(ctx, fmt.Sprintf("%s%s", s.SearchConfig.ServiceName, d))
+			s.probeService(ctx, fmt.Sprintf("%s%s", s.Config.ServiceName, d))
 		}(domain)
 
 		// Try numbered instances (e.g., cacheservice-1.internal, cacheservice-2.internal)
-		for i := 0; i <= s.SearchConfig.MaxInstances; i++ {
+		for i := 0; i <= s.Config.MaxInstances; i++ {
 			wg.Add(1)
 			go func(d string, num int) {
 				defer wg.Done()
-				hostname := fmt.Sprintf("%s-%d%s", s.SearchConfig.ServiceName, num, d)
+				hostname := fmt.Sprintf("%s-%d%s", s.Config.ServiceName, num, d)
 				s.probeService(ctx, hostname)
 			}(domain, i)
 		}
@@ -128,7 +101,7 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 	}
 
 	for _, ip := range ips {
-		address := fmt.Sprintf("%s:%d", ip, s.SearchConfig.Port)
+		address := fmt.Sprintf("%s:%d", ip, s.Config.Port)
 
 		// Skip ourselves
 		if address == s.selfAddress {
@@ -140,33 +113,20 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 }
 
 func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
-	url := fmt.Sprintf("http://%s/broadcast", address)
-
-	ctx, cancel := context.WithTimeout(ctx, s.SearchConfig.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
 		return
 	}
+	defer conn.Close()
 
-	client := &http.Client{
-		Timeout: s.SearchConfig.Timeout,
-	}
-
-	resp, err := client.Do(req)
+	client := pb.NewCacheServiceClient(conn)
+	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{})
 	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return
-	}
-
-	var broadcastResp BroadcastResponse
-	if err := json.NewDecoder(resp.Body).Decode(&broadcastResp); err != nil {
-		logs.Infof("failed to decode broadcast response from %s: %v", address, err)
 		return
 	}
 
@@ -201,34 +161,28 @@ func (s *System) healthCheck(ctx context.Context) {
 		go func(p *registry.Peer) {
 			defer wg.Done()
 
-			url := fmt.Sprintf("http://%s/broadcast", p.Address)
-
-			ctx, cancel := context.WithTimeout(ctx, s.SearchConfig.Timeout)
+			ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 			defer cancel()
 
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				s.Registry.MarkUnhealthy(p.Address)
-				return
-			}
-
-			client := &http.Client{
-				Timeout: s.SearchConfig.Timeout,
-			}
-
-			resp, err := client.Do(req)
+			conn, err := grpc.NewClient(p.Address,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+			)
 			if err != nil {
 				s.Registry.MarkUnhealthy(p.Address)
 				logs.Infof("peer %s is unhealthy: %v", p.Address, err)
 				return
 			}
-			defer resp.Body.Close()
+			defer conn.Close()
 
-			if resp.StatusCode == http.StatusOK {
-				s.Registry.UpdateLastSeen(p.Address)
-			} else {
+			client := pb.NewCacheServiceClient(conn)
+			_, err = client.Broadcast(ctx, &pb.BroadcastRequest{})
+			if err != nil {
 				s.Registry.MarkUnhealthy(p.Address)
+				logs.Infof("peer %s is unhealthy: %v", p.Address, err)
+				return
 			}
+
+			s.Registry.UpdateLastSeen(p.Address)
 		}(peer)
 	}
 
@@ -237,33 +191,21 @@ func (s *System) healthCheck(ctx context.Context) {
 
 // ProbeAddress allows manual probing of a specific address
 func (s *System) ProbeAddress(ctx context.Context, address string) error {
-	url := fmt.Sprintf("http://%s/broadcast", address)
-
-	ctx, cancel := context.WithTimeout(ctx, s.SearchConfig.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect: %w", err)
 	}
+	defer conn.Close()
 
-	client := &http.Client{
-		Timeout: s.SearchConfig.Timeout,
-	}
-
-	resp, err := client.Do(req)
+	client := pb.NewCacheServiceClient(conn)
+	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{})
 	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	var broadcastResp BroadcastResponse
-	if err := json.NewDecoder(resp.Body).Decode(&broadcastResp); err != nil {
-		return err
+		return fmt.Errorf("broadcast failed: %w", err)
 	}
 
 	peerAddr := broadcastResp.Address

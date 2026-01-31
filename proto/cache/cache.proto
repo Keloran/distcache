@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package cache;
+
+option go_package = "github.com/keloran/distcache/proto/cache";
+
+// CacheService handles inter-cache communication between nodes
+service CacheService {
+  // Broadcast returns information about this cache node
+  rpc Broadcast(BroadcastRequest) returns (BroadcastResponse);
+
+  // HealthCheck checks if a peer is healthy
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message BroadcastRequest {}
+
+message BroadcastResponse {
+  string name = 1;
+  string address = 2;
+  string version = 3;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  int32 peer_count = 2;
+  int32 healthy_peer_count = 3;
+}
