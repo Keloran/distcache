@@ -4,12 +4,13 @@ import (
 	"sync"
 	"time"
 
+	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
 )
 
 type Data struct {
 	Timestamp time.Time
-	Content   []byte
+	Value     *pb.CacheValue
 }
 
 type Cache struct {
@@ -59,15 +60,15 @@ func (s *System) KeyExists() bool {
 }
 
 // CreateEntry adds a new entry and cleans up expired entries for this key
-func (s *System) CreateEntry(data []byte) {
-	s.CreateEntryWithTimestamp(data, time.Now())
+func (s *System) CreateEntry(value *pb.CacheValue) {
+	s.CreateEntryWithTimestamp(value, time.Now())
 }
 
 // CreateEntryWithTimestamp adds a new entry with a specific timestamp (used for replication)
-func (s *System) CreateEntryWithTimestamp(data []byte, timestamp time.Time) {
+func (s *System) CreateEntryWithTimestamp(value *pb.CacheValue, timestamp time.Time) {
 	cacheData := &Data{
 		Timestamp: timestamp,
-		Content:   data,
+		Value:     value,
 	}
 
 	s.Cache.mu.Lock()

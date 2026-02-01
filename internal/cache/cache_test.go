@@ -1,11 +1,11 @@
 package cache
 
 import (
-	"bytes"
 	"sync"
 	"testing"
 	"time"
 
+	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
 )
 
@@ -19,6 +19,26 @@ func newTestCacheWithTTL(ttl time.Duration) *Cache {
 
 func newTestConfig() *ConfigBuilder.Config {
 	return &ConfigBuilder.Config{}
+}
+
+func stringValue(s string) *pb.CacheValue {
+	return &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: s}}
+}
+
+func intValue(i int64) *pb.CacheValue {
+	return &pb.CacheValue{Value: &pb.CacheValue_IntValue{IntValue: i}}
+}
+
+func floatValue(f float64) *pb.CacheValue {
+	return &pb.CacheValue{Value: &pb.CacheValue_FloatValue{FloatValue: f}}
+}
+
+func boolValue(b bool) *pb.CacheValue {
+	return &pb.CacheValue{Value: &pb.CacheValue_BoolValue{BoolValue: b}}
+}
+
+func bytesValue(b []byte) *pb.CacheValue {
+	return &pb.CacheValue{Value: &pb.CacheValue_BytesValue{BytesValue: b}}
 }
 
 func TestNew(t *testing.T) {
@@ -67,7 +87,7 @@ func TestSystem_KeyExists_Exists(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "my-key", cache)
 
-	sys.CreateEntry([]byte("test-data"))
+	sys.CreateEntry(stringValue("test-data"))
 
 	if !sys.KeyExists() {
 		t.Error("KeyExists() should return true after CreateEntry")
@@ -86,13 +106,13 @@ func TestSystem_KeyExists_NilEntries(t *testing.T) {
 	}
 }
 
-func TestSystem_CreateEntry(t *testing.T) {
+func TestSystem_CreateEntry_String(t *testing.T) {
 	cfg := newTestConfig()
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
 	beforeCreate := time.Now()
-	sys.CreateEntry([]byte("hello world"))
+	sys.CreateEntry(stringValue("hello world"))
 	afterCreate := time.Now()
 
 	if !sys.KeyExists() {
@@ -105,11 +125,80 @@ func TestSystem_CreateEntry(t *testing.T) {
 	}
 
 	entry := entries[0]
-	if !bytes.Equal(entry.Content, []byte("hello world")) {
-		t.Errorf("Content = %v, want %q", entry.Content, "hello world")
+	if entry.Value.GetStringValue() != "hello world" {
+		t.Errorf("StringValue = %v, want %q", entry.Value.GetStringValue(), "hello world")
 	}
 	if entry.Timestamp.Before(beforeCreate) || entry.Timestamp.After(afterCreate) {
 		t.Error("Timestamp should be set to current time")
+	}
+}
+
+func TestSystem_CreateEntry_Int(t *testing.T) {
+	cfg := newTestConfig()
+	cache := newTestCache()
+	sys := New(cfg, "test-key", cache)
+
+	sys.CreateEntry(intValue(12345))
+
+	entries := cache.entries["test-key"]
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if entries[0].Value.GetIntValue() != 12345 {
+		t.Errorf("IntValue = %v, want 12345", entries[0].Value.GetIntValue())
+	}
+}
+
+func TestSystem_CreateEntry_Float(t *testing.T) {
+	cfg := newTestConfig()
+	cache := newTestCache()
+	sys := New(cfg, "test-key", cache)
+
+	sys.CreateEntry(floatValue(3.14159))
+
+	entries := cache.entries["test-key"]
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if entries[0].Value.GetFloatValue() != 3.14159 {
+		t.Errorf("FloatValue = %v, want 3.14159", entries[0].Value.GetFloatValue())
+	}
+}
+
+func TestSystem_CreateEntry_Bool(t *testing.T) {
+	cfg := newTestConfig()
+	cache := newTestCache()
+	sys := New(cfg, "test-key", cache)
+
+	sys.CreateEntry(boolValue(true))
+
+	entries := cache.entries["test-key"]
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if entries[0].Value.GetBoolValue() != true {
+		t.Errorf("BoolValue = %v, want true", entries[0].Value.GetBoolValue())
+	}
+}
+
+func TestSystem_CreateEntry_Bytes(t *testing.T) {
+	cfg := newTestConfig()
+	cache := newTestCache()
+	sys := New(cfg, "test-key", cache)
+
+	jsonData := []byte(`{"name":"test","value":123}`)
+	sys.CreateEntry(bytesValue(jsonData))
+
+	entries := cache.entries["test-key"]
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+
+	if string(entries[0].Value.GetBytesValue()) != string(jsonData) {
+		t.Errorf("BytesValue = %v, want %v", entries[0].Value.GetBytesValue(), jsonData)
 	}
 }
 
@@ -118,23 +207,23 @@ func TestSystem_CreateEntry_Multiple(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry([]byte("first"))
-	sys.CreateEntry([]byte("second"))
-	sys.CreateEntry([]byte("third"))
+	sys.CreateEntry(stringValue("first"))
+	sys.CreateEntry(stringValue("second"))
+	sys.CreateEntry(stringValue("third"))
 
 	entries := cache.entries["test-key"]
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(entries))
 	}
 
-	if !bytes.Equal(entries[0].Content, []byte("first")) {
-		t.Errorf("entries[0].Content = %v, want %q", entries[0].Content, "first")
+	if entries[0].Value.GetStringValue() != "first" {
+		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetStringValue(), "first")
 	}
-	if !bytes.Equal(entries[1].Content, []byte("second")) {
-		t.Errorf("entries[1].Content = %v, want %q", entries[1].Content, "second")
+	if entries[1].Value.GetStringValue() != "second" {
+		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetStringValue(), "second")
 	}
-	if !bytes.Equal(entries[2].Content, []byte("third")) {
-		t.Errorf("entries[2].Content = %v, want %q", entries[2].Content, "third")
+	if entries[2].Value.GetStringValue() != "third" {
+		t.Errorf("entries[2] = %v, want %q", entries[2].Value.GetStringValue(), "third")
 	}
 }
 
@@ -144,7 +233,7 @@ func TestSystem_CreateEntryWithTimestamp(t *testing.T) {
 	sys := New(cfg, "test-key", cache)
 
 	customTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
-	sys.CreateEntryWithTimestamp([]byte("data"), customTime)
+	sys.CreateEntryWithTimestamp(stringValue("data"), customTime)
 
 	entries := cache.entries["test-key"]
 	if len(entries) != 1 {
@@ -161,7 +250,7 @@ func TestSystem_RemoveKey(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry([]byte("data"))
+	sys.CreateEntry(stringValue("data"))
 	if !sys.KeyExists() {
 		t.Fatal("key should exist before remove")
 	}
@@ -193,8 +282,8 @@ func TestSystem_RemoveKey_PreservesOtherKeys(t *testing.T) {
 	sys1 := New(cfg, "key1", cache)
 	sys2 := New(cfg, "key2", cache)
 
-	sys1.CreateEntry([]byte("data1"))
-	sys2.CreateEntry([]byte("data2"))
+	sys1.CreateEntry(stringValue("data1"))
+	sys2.CreateEntry(stringValue("data2"))
 
 	sys1.RemoveKey()
 
@@ -211,19 +300,19 @@ func TestSystem_GetEntries(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry([]byte("first"))
-	sys.CreateEntry([]byte("second"))
+	sys.CreateEntry(stringValue("first"))
+	sys.CreateEntry(stringValue("second"))
 
 	entries := sys.GetEntries()
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	if !bytes.Equal(entries[0].Content, []byte("first")) {
-		t.Errorf("entries[0].Content = %v, want %q", entries[0].Content, "first")
+	if entries[0].Value.GetStringValue() != "first" {
+		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetStringValue(), "first")
 	}
-	if !bytes.Equal(entries[1].Content, []byte("second")) {
-		t.Errorf("entries[1].Content = %v, want %q", entries[1].Content, "second")
+	if entries[1].Value.GetStringValue() != "second" {
+		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetStringValue(), "second")
 	}
 }
 
@@ -243,7 +332,7 @@ func TestSystem_TTL_ExpiresEntries(t *testing.T) {
 	cache := newTestCacheWithTTL(50 * time.Millisecond)
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry([]byte("old-data"))
+	sys.CreateEntry(stringValue("old-data"))
 
 	// Entry should exist
 	if !sys.KeyExists() {
@@ -269,21 +358,21 @@ func TestSystem_TTL_CleansOnCreate(t *testing.T) {
 	cache := newTestCacheWithTTL(50 * time.Millisecond)
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry([]byte("old-data"))
+	sys.CreateEntry(stringValue("old-data"))
 
 	// Wait for first entry to expire
 	time.Sleep(60 * time.Millisecond)
 
 	// Create new entry - should clean expired ones
-	sys.CreateEntry([]byte("new-data"))
+	sys.CreateEntry(stringValue("new-data"))
 
 	entries := sys.GetEntries()
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry after cleanup, got %d", len(entries))
 	}
 
-	if !bytes.Equal(entries[0].Content, []byte("new-data")) {
-		t.Errorf("expected new-data, got %v", entries[0].Content)
+	if entries[0].Value.GetStringValue() != "new-data" {
+		t.Errorf("expected new-data, got %v", entries[0].Value.GetStringValue())
 	}
 }
 
@@ -293,7 +382,7 @@ func TestSystem_RemoveTimedEntries(t *testing.T) {
 	sys := New(cfg, "test-key", cache)
 
 	// Create entry
-	sys.CreateEntry([]byte("old-data"))
+	sys.CreateEntry(stringValue("old-data"))
 
 	// Wait a bit
 	time.Sleep(20 * time.Millisecond)
@@ -313,7 +402,7 @@ func TestSystem_RemoveTimedEntries_KeepsRecent(t *testing.T) {
 	sys := New(cfg, "test-key", cache)
 
 	// Create entry
-	sys.CreateEntry([]byte("recent-data"))
+	sys.CreateEntry(stringValue("recent-data"))
 
 	// Remove entries older than 1 hour (should keep our entry)
 	sys.RemoveTimedEntries(time.Hour)
@@ -340,8 +429,8 @@ func TestCache_CleanAllExpired(t *testing.T) {
 	sys1 := New(cfg, "key1", cache)
 	sys2 := New(cfg, "key2", cache)
 
-	sys1.CreateEntry([]byte("data1"))
-	sys2.CreateEntry([]byte("data2"))
+	sys1.CreateEntry(stringValue("data1"))
+	sys2.CreateEntry(stringValue("data2"))
 
 	// Wait for entries to expire
 	time.Sleep(60 * time.Millisecond)
@@ -362,7 +451,7 @@ func TestCache_CleanAllExpired_NoTTL(t *testing.T) {
 	cache := newTestCache() // No TTL
 
 	sys := New(cfg, "test-key", cache)
-	sys.CreateEntry([]byte("data"))
+	sys.CreateEntry(stringValue("data"))
 
 	// Should not remove anything when TTL is 0
 	cache.CleanAllExpired()
@@ -393,7 +482,7 @@ func TestSystem_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			sys.CreateEntry([]byte(itoa(idx)))
+			sys.CreateEntry(intValue(int64(idx)))
 		}(i)
 	}
 
@@ -426,7 +515,7 @@ func TestSystem_ConcurrentCreateRemove(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			sys := New(cfg, "key-"+itoa(idx%5), cache)
-			sys.CreateEntry([]byte(itoa(idx)))
+			sys.CreateEntry(intValue(int64(idx)))
 		}(i)
 		go func(idx int) {
 			defer wg.Done()
@@ -448,9 +537,9 @@ func TestSystem_MultipleSystemsSameCache(t *testing.T) {
 	sys2 := New(cfg, "key2", cache)
 	sys3 := New(cfg, "key1", cache) // Same key as sys1
 
-	sys1.CreateEntry([]byte("from-sys1"))
-	sys2.CreateEntry([]byte("from-sys2"))
-	sys3.CreateEntry([]byte("from-sys3")) // Should append to same key as sys1
+	sys1.CreateEntry(stringValue("from-sys1"))
+	sys2.CreateEntry(stringValue("from-sys2"))
+	sys3.CreateEntry(stringValue("from-sys3")) // Should append to same key as sys1
 
 	// key1 should have 2 entries
 	if len(cache.entries["key1"]) != 2 {
@@ -471,14 +560,14 @@ func TestSystem_MultipleSystemsSameCache(t *testing.T) {
 func TestData_Fields(t *testing.T) {
 	data := &Data{
 		Timestamp: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-		Content:   []byte("test content"),
+		Value:     stringValue("test content"),
 	}
 
 	if data.Timestamp.Year() != 2024 {
 		t.Errorf("Timestamp year = %d, want 2024", data.Timestamp.Year())
 	}
-	if !bytes.Equal(data.Content, []byte("test content")) {
-		t.Errorf("Content = %v, want %q", data.Content, "test content")
+	if data.Value.GetStringValue() != "test content" {
+		t.Errorf("Value = %v, want %q", data.Value.GetStringValue(), "test content")
 	}
 }
 

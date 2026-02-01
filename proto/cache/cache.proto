@@ -40,9 +40,20 @@ message HealthCheckResponse {
   int32 healthy_peer_count = 3;
 }
 
+// CacheValue represents a value that can be one of several types
+message CacheValue {
+  oneof value {
+    string string_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+    bool bool_value = 4;
+    bytes bytes_value = 5; // For JSON or raw binary data
+  }
+}
+
 message SetCacheRequest {
   string key = 1;
-  bytes value = 2;
+  CacheValue value = 2;
   int64 timestamp_unix_nano = 3;
   bool from_replication = 4; // true if this is a replication from another node (don't re-replicate)
 }
@@ -62,6 +73,6 @@ message GetCacheResponse {
 }
 
 message CacheEntry {
-  bytes value = 1;
+  CacheValue value = 1;
   int64 timestamp_unix_nano = 2;
 }
