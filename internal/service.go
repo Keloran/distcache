@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
+	grpcmiddleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/keloran/distcache/internal/cache"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
@@ -19,7 +20,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
-	grpcmiddleware "github.com/grpc-ecosystem/go-grpc-middleware
 )
 
 type Service struct {
