@@ -18,6 +18,8 @@ import (
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/reflection"
+	grpcmiddleware "github.com/grpc-ecosystem/go-grpc-middleware
 )
 
 type Service struct {
@@ -128,7 +130,10 @@ func (s *Service) Start() error {
 	// Update our address now that we know the actual port
 	s.updateSelfAddress(actualPort)
 
-	s.grpcServer = grpc.NewServer()
+	s.grpcServer = grpc.NewServer(
+		grpc.UnaryInterceptor(grpcmiddleware.ChainUnaryServer()),
+	)
+	reflection.RegisterV1(s.grpcServer)
 	pb.RegisterCacheServiceServer(s.grpcServer, s)
 
 	// Start the search/discovery system

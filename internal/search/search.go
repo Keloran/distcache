@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"sync"
@@ -20,14 +21,14 @@ import (
 type PeerDiscoveredCallback func(ctx context.Context, peerAddr string) error
 
 type System struct {
-	Config               *ConfigBuilder.Config
-	Registry             *registry.Registry
-	selfAddress          string
-	stopChan             chan struct{}
-	wg                   sync.WaitGroup
+	Config                *ConfigBuilder.Config
+	Registry              *registry.Registry
+	selfAddress           string
+	stopChan              chan struct{}
+	wg                    sync.WaitGroup
 	onFirstPeerDiscovered PeerDiscoveredCallback
-	hasSynced            bool
-	syncMu               sync.Mutex
+	hasSynced             bool
+	syncMu                sync.Mutex
 }
 
 func NewSystem(cfg *ConfigBuilder.Config, reg *registry.Registry) *System {
@@ -92,6 +93,55 @@ func (s *System) getPredefinedServers() []string {
 		return v
 	}
 	return nil
+}
+
+func (s *System) getIPRanges() []string {
+	if v, ok := s.Config.ProjectProperties["search_ip_ranges"].([]string); ok {
+		return v
+	}
+	return nil
+}
+
+func (s *System) getScanOwnRange() bool {
+	if v, ok := s.Config.ProjectProperties["search_scan_own_range"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// getLocalIP returns the local non-loopback IPv4 address
+func getLocalIP() net.IP {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ip4 := ipnet.IP.To4(); ip4 != nil {
+				return ip4
+			}
+		}
+	}
+	return nil
+}
+
+// getOwnIPRange returns the /24 CIDR range for the server's local IP address
+func (s *System) getOwnIPRange() string {
+	ip4 := getLocalIP()
+	if ip4 == nil {
+		logs.Infof("failed to get local IP address")
+		return ""
+	}
+
+	// Only proceed if it's a private IP
+	if !isPrivateIP(ip4) {
+		logs.Infof("local IP %s is not a private address, skipping own range scan", ip4.String())
+		return ""
+	}
+
+	// Create /24 range (e.g., 192.168.178.0/24)
+	return fmt.Sprintf("%d.%d.%d.0/24", ip4[0], ip4[1], ip4[2])
 }
 
 func (s *System) getCallerName() string {
@@ -168,6 +218,48 @@ func (s *System) FindOthers(ctx context.Context) {
 		}(server)
 	}
 
+	// Probe IP ranges (must be private ranges only)
+	ipRanges := s.getIPRanges()
+	port := s.getPort()
+
+	// If scan_own_range is enabled, add the server's own /24 range
+	if s.getScanOwnRange() {
+		ownRange := s.getOwnIPRange()
+		if ownRange != "" {
+			ipRanges = append(ipRanges, ownRange)
+		}
+	}
+	for _, cidr := range ipRanges {
+		if cidr == "" {
+			continue
+		}
+
+		// Validate that it's a private range
+		if !isPrivateRange(cidr) {
+			logs.Warnf("skipping non-private IP range: %s (only private ranges are allowed)", cidr)
+			continue
+		}
+
+		ips, err := expandCIDR(cidr)
+		if err != nil {
+			logs.Warnf("failed to expand IP range %s: %v", cidr, err)
+			continue
+		}
+
+		for _, ip := range ips {
+			wg.Add(1)
+			go func(ipAddr net.IP) {
+				defer wg.Done()
+				address := fmt.Sprintf("%s:%d", ipAddr.String(), port)
+				// Skip ourselves
+				if address == s.selfAddress {
+					return
+				}
+				s.tryBroadcast(ctx, ipAddr.String(), address)
+			}(ip)
+		}
+	}
+
 	// Probe domains for service discovery
 	for _, domain := range domains {
 		// Try base service name (e.g., cacheservice.internal)
@@ -215,6 +307,10 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	ctx, cancel := context.WithTimeout(ctx, s.getTimeout())
 	defer cancel()
+
+	if address == "192.168.178.79:42069" {
+		logs.Infof("broadcasting %s to %s", address, hostname)
+	}
 
 	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -321,6 +417,101 @@ func (s *System) healthCheck(ctx context.Context) {
 	}
 
 	wg.Wait()
+}
+
+// isPrivateIP checks if an IP address is in a private range (RFC 1918)
+func isPrivateIP(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		// 10.0.0.0/8
+		if ip4[0] == 10 {
+			return true
+		}
+		// 172.16.0.0/12
+		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
+			return true
+		}
+		// 192.168.0.0/16
+		if ip4[0] == 192 && ip4[1] == 168 {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivateRange checks if a CIDR range is entirely within private IP space
+func isPrivateRange(cidr string) bool {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	// Check if the network address is private
+	if !isPrivateIP(network.IP) {
+		return false
+	}
+
+	// Check if the broadcast address is also private
+	// Calculate the last IP in the range
+	ones, bits := network.Mask.Size()
+	if bits == 0 {
+		return false
+	}
+
+	// For the last IP, we need to set all host bits to 1
+	lastIP := make(net.IP, len(network.IP))
+	copy(lastIP, network.IP)
+
+	// Calculate number of host bits
+	hostBits := bits - ones
+
+	// Set all host bits to 1 to get the broadcast/last address
+	for i := bits - 1; i >= ones; i-- {
+		byteIdx := i / 8
+		bitIdx := 7 - (i % 8)
+		lastIP[byteIdx] |= 1 << bitIdx
+		hostBits--
+	}
+
+	return isPrivateIP(lastIP)
+}
+
+// expandCIDR returns all IP addresses in a CIDR range
+func expandCIDR(cidr string) ([]net.IP, error) {
+	_, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CIDR: %w", err)
+	}
+
+	var ips []net.IP
+	ip := network.IP.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("only IPv4 ranges are supported")
+	}
+
+	// Convert to uint32 for easy iteration
+	start := binary.BigEndian.Uint32(ip)
+
+	ones, bits := network.Mask.Size()
+	hostBits := bits - ones
+	numHosts := uint32(1) << hostBits
+
+	// Skip network address (first) and broadcast address (last) for /24 and smaller
+	startOffset := uint32(1)
+	endOffset := uint32(1)
+	if hostBits <= 1 {
+		// For /31 and /32, include all addresses
+		startOffset = 0
+		endOffset = 0
+	}
+
+	for i := startOffset; i < numHosts-endOffset; i++ {
+		ipInt := start + i
+		newIP := make(net.IP, 4)
+		binary.BigEndian.PutUint32(newIP, ipInt)
+		ips = append(ips, newIP)
+	}
+
+	return ips, nil
 }
 
 // ProbeAddress allows manual probing of a specific address

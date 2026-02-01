@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/bugfixes/go-bugfixes v0.14.1
+	github.com/caarlos0/env/v8 v8.0.0
 	github.com/keloran/go-config v1.8.0
 	google.golang.org/grpc v1.72.0
 	google.golang.org/protobuf v1.36.6
@@ -11,13 +12,13 @@ require (
 
 require (
 	github.com/Nerzal/gocloak/v13 v13.9.0 // indirect
-	github.com/caarlos0/env/v8 v8.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.1 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/go-resty/resty/v2 v2.16.5 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
+	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect

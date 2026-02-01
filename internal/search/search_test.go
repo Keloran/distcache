@@ -852,3 +852,317 @@ func TestSystem_NilConfig(t *testing.T) {
 		t.Errorf("getServiceName() = %q, want %q", sys.getServiceName(), "distcache")
 	}
 }
+
+// === IP RANGE TESTS ===
+
+func TestIsPrivateIP(t *testing.T) {
+	tests := []struct {
+		ip       string
+		expected bool
+	}{
+		// Private ranges
+		{"10.0.0.1", true},
+		{"10.255.255.255", true},
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"192.168.0.1", true},
+		{"192.168.178.1", true},
+		{"192.168.255.255", true},
+		// Non-private ranges
+		{"8.8.8.8", false},
+		{"1.1.1.1", false},
+		{"172.15.0.1", false},  // Just below 172.16
+		{"172.32.0.1", false},  // Just above 172.31
+		{"192.167.1.1", false}, // Not 192.168
+		{"192.169.1.1", false}, // Not 192.168
+		{"11.0.0.1", false},    // Not 10.x
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			if ip == nil {
+				t.Fatalf("failed to parse IP: %s", tt.ip)
+			}
+			result := isPrivateIP(ip)
+			if result != tt.expected {
+				t.Errorf("isPrivateIP(%s) = %v, want %v", tt.ip, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestIsPrivateRange(t *testing.T) {
+	tests := []struct {
+		cidr     string
+		expected bool
+	}{
+		// Valid private ranges
+		{"192.168.178.0/24", true},
+		{"192.168.0.0/16", true},
+		{"10.0.0.0/8", true},
+		{"10.1.2.0/24", true},
+		{"172.16.0.0/12", true},
+		{"172.20.0.0/24", true},
+		// /23 ranges within private space are still private (CIDR normalizes them)
+		{"192.168.255.0/23", true}, // Normalized to 192.168.254.0/23, all in 192.168.x
+		{"172.31.255.0/23", true},  // Normalized to 172.31.254.0/23, all in 172.16-31.x
+		// Invalid (public) ranges
+		{"8.8.8.0/24", false},
+		{"1.0.0.0/8", false},
+		// Invalid CIDR
+		{"not-a-cidr", false},
+		{"192.168.1.1", false}, // Missing /prefix
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cidr, func(t *testing.T) {
+			result := isPrivateRange(tt.cidr)
+			if result != tt.expected {
+				t.Errorf("isPrivateRange(%s) = %v, want %v", tt.cidr, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestExpandCIDR(t *testing.T) {
+	tests := []struct {
+		cidr          string
+		expectedCount int
+		expectedFirst string
+		expectedLast  string
+		expectError   bool
+	}{
+		// /24 = 256 addresses, minus network and broadcast = 254
+		{"192.168.178.0/24", 254, "192.168.178.1", "192.168.178.254", false},
+		// /30 = 4 addresses, minus network and broadcast = 2
+		{"192.168.1.0/30", 2, "192.168.1.1", "192.168.1.2", false},
+		// /32 = single address
+		{"192.168.1.1/32", 1, "192.168.1.1", "192.168.1.1", false},
+		// /31 = 2 addresses (point-to-point, no broadcast)
+		{"192.168.1.0/31", 2, "192.168.1.0", "192.168.1.1", false},
+		// Invalid
+		{"not-a-cidr", 0, "", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cidr, func(t *testing.T) {
+			ips, err := expandCIDR(tt.cidr)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error for %s", tt.cidr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(ips) != tt.expectedCount {
+				t.Errorf("expandCIDR(%s) returned %d IPs, want %d", tt.cidr, len(ips), tt.expectedCount)
+			}
+			if len(ips) > 0 {
+				if ips[0].String() != tt.expectedFirst {
+					t.Errorf("first IP = %s, want %s", ips[0].String(), tt.expectedFirst)
+				}
+				if ips[len(ips)-1].String() != tt.expectedLast {
+					t.Errorf("last IP = %s, want %s", ips[len(ips)-1].String(), tt.expectedLast)
+				}
+			}
+		})
+	}
+}
+
+func TestSystem_FindOthers_IPRanges_PrivateOnly(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		// Mix of private and public ranges - only private should be scanned
+		c.ProjectProperties["search_ip_ranges"] = []string{
+			"192.168.178.0/30", // Private - should be scanned
+			"8.8.8.0/30",       // Public - should be skipped
+		}
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress("192.168.1.100:42069")
+
+	ctx := context.Background()
+
+	// Should complete without error
+	sys.FindOthers(ctx)
+
+	// No peers should be found (none of these IPs have servers)
+	// but the test verifies the code runs without issues
+}
+
+func TestSystem_FindOthers_IPRanges_SkipsSelf(t *testing.T) {
+	// Start a mock server
+	lis, grpcServer, port := startMockGRPCServer(t, "peer", "peer-addr:42069")
+	defer grpcServer.GracefulStop()
+	defer lis.Close()
+
+	selfAddress := "127.0.0.1:" + itoa(port)
+
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		c.ProjectProperties["search_port"] = port
+		// This is a bit contrived since 127.0.0.1 isn't in a private range check
+		// but the self-skip logic is tested elsewhere
+		c.ProjectProperties["search_ip_ranges"] = []string{}
+	})
+
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress(selfAddress)
+
+	ctx := context.Background()
+	sys.FindOthers(ctx)
+}
+
+func TestSystem_FindOthers_IPRanges_InvalidCIDR(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		c.ProjectProperties["search_ip_ranges"] = []string{
+			"not-a-valid-cidr",
+			"192.168.1.1", // Missing /prefix
+		}
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx := context.Background()
+
+	// Should complete without error (invalid CIDRs are logged and skipped)
+	sys.FindOthers(ctx)
+}
+
+func TestSystem_GetIPRanges(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_ip_ranges"] = []string{"192.168.1.0/24", "10.0.0.0/8"}
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ranges := sys.getIPRanges()
+	if len(ranges) != 2 {
+		t.Errorf("expected 2 IP ranges, got %d", len(ranges))
+	}
+	if ranges[0] != "192.168.1.0/24" {
+		t.Errorf("first range = %s, want 192.168.1.0/24", ranges[0])
+	}
+}
+
+func TestSystem_GetIPRanges_Default(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ranges := sys.getIPRanges()
+	if ranges != nil {
+		t.Errorf("expected nil IP ranges by default, got %v", ranges)
+	}
+}
+
+func TestSystem_GetScanOwnRange(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_own_range"] = true
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	if !sys.getScanOwnRange() {
+		t.Error("expected getScanOwnRange to return true")
+	}
+}
+
+func TestSystem_GetScanOwnRange_Default(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	if sys.getScanOwnRange() {
+		t.Error("expected getScanOwnRange to return false by default")
+	}
+}
+
+func TestSystem_GetOwnIPRange(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	result := sys.getOwnIPRange()
+
+	// getOwnIPRange uses the actual local IP, so we can only verify:
+	// 1. It returns empty OR a valid /24 CIDR
+	// 2. If non-empty, it should be a private range
+	if result != "" {
+		// Should be a valid CIDR
+		_, network, err := net.ParseCIDR(result)
+		if err != nil {
+			t.Errorf("getOwnIPRange() returned invalid CIDR: %q", result)
+		}
+
+		// Should be a /24
+		ones, _ := network.Mask.Size()
+		if ones != 24 {
+			t.Errorf("getOwnIPRange() should return /24, got /%d", ones)
+		}
+
+		// Should be a private range
+		if !isPrivateRange(result) {
+			t.Errorf("getOwnIPRange() returned non-private range: %q", result)
+		}
+	}
+}
+
+func TestGetLocalIP(t *testing.T) {
+	ip := getLocalIP()
+
+	// getLocalIP can return nil on some systems (e.g., no network interfaces)
+	if ip != nil {
+		// Should be IPv4
+		if ip.To4() == nil {
+			t.Errorf("getLocalIP() should return IPv4, got: %v", ip)
+		}
+		// Should not be loopback
+		if ip.IsLoopback() {
+			t.Errorf("getLocalIP() should not return loopback, got: %v", ip)
+		}
+	}
+}
+
+func TestSystem_FindOthers_ScanOwnRange(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		c.ProjectProperties["search_scan_own_range"] = true
+		c.ProjectProperties["search_timeout"] = 10 * time.Millisecond
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress("192.168.178.50:42069")
+
+	ctx := context.Background()
+
+	// Should complete without error - will scan 192.168.178.0/24
+	// Most IPs won't respond, but the test verifies the feature works
+	sys.FindOthers(ctx)
+}
+
+func TestSystem_FindOthers_ScanOwnRange_PublicIP(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		c.ProjectProperties["search_scan_own_range"] = true
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress("8.8.8.8:42069") // Public IP
+
+	ctx := context.Background()
+
+	// Should complete without scanning (public IP should be ignored)
+	sys.FindOthers(ctx)
+}

@@ -32,6 +32,8 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 		MaxInstances      int           `env:"SERVICE_MAX_INSTANCES" envDefault:"100"`
 		MaxPortRetries    int           `env:"PORT_RETRIES" envDefault:"10"`
 		PredefinedServers []string      `env:"PREDEFINED_SERVERS" envSeparator:","`
+		IPRanges          []string      `env:"SEARCH_IP_RANGES" envSeparator:","`
+		ScanOwnRange      bool          `env:"SEARCH_SCAN_OWN_RANGE" envDefault:"false"`
 	}
 
 	type CacheConfig struct {
@@ -70,6 +72,8 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	cfg.ProjectProperties["search_max_instances"] = search.MaxInstances
 	cfg.ProjectProperties["search_max_port_retries"] = search.MaxPortRetries
 	cfg.ProjectProperties["search_predefined_servers"] = search.PredefinedServers
+	cfg.ProjectProperties["search_ip_ranges"] = search.IPRanges
+	cfg.ProjectProperties["search_scan_own_range"] = search.ScanOwnRange
 
 	// Cache properties
 	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL
