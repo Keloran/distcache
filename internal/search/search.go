@@ -11,24 +11,33 @@ import (
 	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	pb "github.com/keloran/distcache/proto/cache"
+	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 type System struct {
-	Config      config.SearchConfig
+	Config      *ConfigBuilder.Config
 	Registry    *registry.Registry
 	selfAddress string
 	stopChan    chan struct{}
 	wg          sync.WaitGroup
 }
 
-func NewSystem(cfg config.SearchConfig, reg *registry.Registry) *System {
+func NewSystem(cfg *ConfigBuilder.Config, reg *registry.Registry) *System {
 	return &System{
 		Config:   cfg,
 		Registry: reg,
 		stopChan: make(chan struct{}),
 	}
+}
+
+func (s *System) getSearchConfig() config.SearchConfig {
+	return config.GetProjectConfig(s.Config).Search
+}
+
+func (s *System) getServiceConfig() config.ServiceConfig {
+	return config.GetProjectConfig(s.Config).Service
 }
 
 func (s *System) SetSelfAddress(addr string) {
@@ -51,7 +60,7 @@ func (s *System) discoveryLoop(ctx context.Context) {
 	// Initial discovery
 	s.FindOthers(ctx)
 
-	ticker := time.NewTicker(s.Config.ScanInterval)
+	ticker := time.NewTicker(s.getSearchConfig().ScanInterval)
 	defer ticker.Stop()
 
 	for {
@@ -70,20 +79,21 @@ func (s *System) discoveryLoop(ctx context.Context) {
 func (s *System) FindOthers(ctx context.Context) {
 	var wg sync.WaitGroup
 
-	for _, domain := range s.Config.Domains {
+	searchCfg := s.getSearchConfig()
+	for _, domain := range searchCfg.Domains {
 		// Try base service name (e.g., cacheservice.internal)
 		wg.Add(1)
 		go func(d string) {
 			defer wg.Done()
-			s.probeService(ctx, fmt.Sprintf("%s%s", s.Config.ServiceName, d))
+			s.probeService(ctx, fmt.Sprintf("%s%s", searchCfg.ServiceName, d))
 		}(domain)
 
 		// Try numbered instances (e.g., cacheservice-1.internal, cacheservice-2.internal)
-		for i := 0; i <= s.Config.MaxInstances; i++ {
+		for i := 0; i <= searchCfg.MaxInstances; i++ {
 			wg.Add(1)
 			go func(d string, num int) {
 				defer wg.Done()
-				hostname := fmt.Sprintf("%s-%d%s", s.Config.ServiceName, num, d)
+				hostname := fmt.Sprintf("%s-%d%s", searchCfg.ServiceName, num, d)
 				s.probeService(ctx, hostname)
 			}(domain, i)
 		}
@@ -101,7 +111,7 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 	}
 
 	for _, ip := range ips {
-		address := fmt.Sprintf("%s:%d", ip, s.Config.Port)
+		address := fmt.Sprintf("%s:%d", ip, s.getSearchConfig().Port)
 
 		// Skip ourselves
 		if address == s.selfAddress {
@@ -113,7 +123,7 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 }
 
 func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
-	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
 	defer cancel()
 
 	conn, err := grpc.NewClient(address,
@@ -125,7 +135,12 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	defer conn.Close()
 
 	client := pb.NewCacheServiceClient(conn)
-	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{})
+	svcCfg := s.getServiceConfig()
+	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{
+		CallerName:    svcCfg.Name,
+		CallerAddress: s.selfAddress,
+		CallerVersion: svcCfg.Version,
+	})
 	if err != nil {
 		return
 	}
@@ -161,7 +176,7 @@ func (s *System) healthCheck(ctx context.Context) {
 		go func(p *registry.Peer) {
 			defer wg.Done()
 
-			ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
+			ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
 			defer cancel()
 
 			conn, err := grpc.NewClient(p.Address,
@@ -191,7 +206,7 @@ func (s *System) healthCheck(ctx context.Context) {
 
 // ProbeAddress allows manual probing of a specific address
 func (s *System) ProbeAddress(ctx context.Context, address string) error {
-	ctx, cancel := context.WithTimeout(ctx, s.Config.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
 	defer cancel()
 
 	conn, err := grpc.NewClient(address,

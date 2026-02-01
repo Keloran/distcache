@@ -10,18 +10,54 @@ import (
 	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	pb "github.com/keloran/distcache/proto/cache"
+	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
 )
 
-func defaultTestConfig() config.SearchConfig {
-	return config.SearchConfig{
+func defaultTestConfig() *ConfigBuilder.Config {
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties.Set("project", config.ProjectConfig{
+		Service: config.ServiceConfig{
+			Name:    "testservice",
+			Version: "1.0.0",
+		},
+		Search: config.SearchConfig{
+			ServiceName:  "testservice",
+			Domains:      []string{".test"},
+			Port:         42069,
+			ScanInterval: time.Hour, // Long interval to prevent auto-discovery
+			Timeout:      100 * time.Millisecond,
+			MaxInstances: 5,
+		},
+	})
+	return cfg
+}
+
+func testConfigWithOverrides(overrides func(*config.SearchConfig)) *ConfigBuilder.Config {
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	searchCfg := config.SearchConfig{
 		ServiceName:  "testservice",
 		Domains:      []string{".test"},
 		Port:         42069,
-		ScanInterval: time.Hour, // Long interval to prevent auto-discovery
+		ScanInterval: time.Hour,
 		Timeout:      100 * time.Millisecond,
 		MaxInstances: 5,
 	}
+	if overrides != nil {
+		overrides(&searchCfg)
+	}
+	cfg.ProjectProperties.Set("project", config.ProjectConfig{
+		Service: config.ServiceConfig{
+			Name:    "testservice",
+			Version: "1.0.0",
+		},
+		Search: searchCfg,
+	})
+	return cfg
 }
 
 func TestNewSystem(t *testing.T) {
@@ -36,8 +72,9 @@ func TestNewSystem(t *testing.T) {
 	if sys.Registry != reg {
 		t.Error("Registry not set correctly")
 	}
-	if sys.Config.ServiceName != "testservice" {
-		t.Errorf("ServiceName = %q, want %q", sys.Config.ServiceName, "testservice")
+	searchCfg := sys.getSearchConfig()
+	if searchCfg.ServiceName != "testservice" {
+		t.Errorf("ServiceName = %q, want %q", searchCfg.ServiceName, "testservice")
 	}
 	if sys.stopChan == nil {
 		t.Error("stopChan should be initialized")
@@ -57,8 +94,9 @@ func TestSystem_SetSelfAddress(t *testing.T) {
 }
 
 func TestSystem_StartStop(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.ScanInterval = 10 * time.Millisecond
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.ScanInterval = 10 * time.Millisecond
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -86,8 +124,9 @@ func TestSystem_StartStop(t *testing.T) {
 }
 
 func TestSystem_StartStop_ContextCancel(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.ScanInterval = time.Hour
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.ScanInterval = time.Hour
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -117,9 +156,10 @@ func TestSystem_StartStop_ContextCancel(t *testing.T) {
 }
 
 func TestSystem_FindOthers_NoHosts(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Domains = []string{".nonexistent.invalid"}
-	cfg.MaxInstances = 2
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.Domains = []string{".nonexistent.invalid"}
+		sc.MaxInstances = 2
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -135,8 +175,9 @@ func TestSystem_FindOthers_NoHosts(t *testing.T) {
 }
 
 func TestSystem_TryBroadcast_Timeout(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Timeout = 10 * time.Millisecond
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.Timeout = 10 * time.Millisecond
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -276,8 +317,9 @@ func TestSystem_HealthCheck_Success(t *testing.T) {
 }
 
 func TestSystem_HealthCheck_Failure(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.Timeout = 50 * time.Millisecond
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -306,8 +348,9 @@ func TestSystem_HealthCheck_EmptyRegistry(t *testing.T) {
 }
 
 func TestSystem_HealthCheck_Concurrent(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.Timeout = 50 * time.Millisecond
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -353,8 +396,9 @@ func TestSystem_ProbeAddress_Success(t *testing.T) {
 }
 
 func TestSystem_ProbeAddress_ConnectionFailure(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.Timeout = 50 * time.Millisecond
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -422,17 +466,29 @@ func TestSystem_ProbeService_SkipSelf(t *testing.T) {
 
 type mockCacheServer struct {
 	pb.UnimplementedCacheServiceServer
-	name    string
-	address string
-	version string
+	name         string
+	address      string
+	version      string
+	lastRequest  *pb.BroadcastRequest
+	requestMu    sync.Mutex
 }
 
 func (m *mockCacheServer) Broadcast(ctx context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
+	m.requestMu.Lock()
+	m.lastRequest = req
+	m.requestMu.Unlock()
+
 	return &pb.BroadcastResponse{
 		Name:    m.name,
 		Address: m.address,
 		Version: m.version,
 	}, nil
+}
+
+func (m *mockCacheServer) getLastRequest() *pb.BroadcastRequest {
+	m.requestMu.Lock()
+	defer m.requestMu.Unlock()
+	return m.lastRequest
 }
 
 func (m *mockCacheServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRequest) (*pb.HealthCheckResponse, error) {
@@ -444,21 +500,29 @@ func (m *mockCacheServer) HealthCheck(ctx context.Context, req *pb.HealthCheckRe
 }
 
 func startMockGRPCServer(t *testing.T, name, address string) (net.Listener, *grpc.Server, int) {
-	return startMockGRPCServerCustom(t, name, address, "1.0.0")
+	lis, server, port, _ := startMockGRPCServerWithMock(t, name, address, "1.0.0")
+	return lis, server, port
 }
 
 func startMockGRPCServerCustom(t *testing.T, name, address, version string) (net.Listener, *grpc.Server, int) {
+	lis, server, port, _ := startMockGRPCServerWithMock(t, name, address, version)
+	return lis, server, port
+}
+
+func startMockGRPCServerWithMock(t *testing.T, name, address, version string) (net.Listener, *grpc.Server, int, *mockCacheServer) {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
 
-	server := grpc.NewServer()
-	pb.RegisterCacheServiceServer(server, &mockCacheServer{
+	mock := &mockCacheServer{
 		name:    name,
 		address: address,
 		version: version,
-	})
+	}
+
+	server := grpc.NewServer()
+	pb.RegisterCacheServiceServer(server, mock)
 
 	go server.Serve(lis)
 
@@ -466,7 +530,7 @@ func startMockGRPCServerCustom(t *testing.T, name, address, version string) (net
 	time.Sleep(10 * time.Millisecond)
 
 	port := lis.Addr().(*net.TCPAddr).Port
-	return lis, server, port
+	return lis, server, port, mock
 }
 
 func itoa(i int) string {
@@ -482,10 +546,11 @@ func itoa(i int) string {
 }
 
 func TestSystem_DiscoveryLoop_Ticker(t *testing.T) {
-	cfg := defaultTestConfig()
-	cfg.ScanInterval = 20 * time.Millisecond
-	cfg.Domains = []string{".nonexistent.invalid"}
-	cfg.MaxInstances = 0
+	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
+		sc.ScanInterval = 20 * time.Millisecond
+		sc.Domains = []string{".nonexistent.invalid"}
+		sc.MaxInstances = 0
+	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
 
@@ -500,4 +565,34 @@ func TestSystem_DiscoveryLoop_Ticker(t *testing.T) {
 	sys.Stop()
 
 	// Test passes if no panic/deadlock occurred
+}
+
+func TestSystem_TryBroadcast_SendsCallerInfo(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress("192.168.1.100:42069")
+
+	// Start mock server that captures the request
+	lis, grpcServer, port, mock := startMockGRPCServerWithMock(t, "peer-node", "192.168.1.1:42069", "1.0.0")
+	defer grpcServer.GracefulStop()
+	defer lis.Close()
+
+	ctx := context.Background()
+	sys.tryBroadcast(ctx, "peer-host", "127.0.0.1:"+itoa(port))
+
+	// Verify caller info was sent
+	req := mock.getLastRequest()
+	if req == nil {
+		t.Fatal("no request received")
+	}
+	if req.CallerName != "testservice" {
+		t.Errorf("CallerName = %q, want %q", req.CallerName, "testservice")
+	}
+	if req.CallerAddress != "192.168.1.100:42069" {
+		t.Errorf("CallerAddress = %q, want %q", req.CallerAddress, "192.168.1.100:42069")
+	}
+	if req.CallerVersion != "1.0.0" {
+		t.Errorf("CallerVersion = %q, want %q", req.CallerVersion, "1.0.0")
+	}
 }

@@ -37,7 +37,7 @@ func New(cfg *ConfigBuilder.Config) *Service {
 		selfAddress = fmt.Sprintf("%s:%d", hostname, pc.Search.Port)
 	}
 
-	searchSystem := search.NewSystem(pc.Search, reg)
+	searchSystem := search.NewSystem(cfg, reg)
 	searchSystem.SetSelfAddress(selfAddress)
 
 	return &Service{
@@ -100,7 +100,21 @@ func (s *Service) shutdown(_ context.Context) error {
 }
 
 // Broadcast implements the gRPC Broadcast RPC
-func (s *Service) Broadcast(_ context.Context, _ *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
+// When a peer calls Broadcast, we register them in our registry (mutual registration)
+func (s *Service) Broadcast(_ context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
+	// Register the caller if they provided their info
+	if req.CallerAddress != "" && req.CallerAddress != s.selfAddress {
+		name := req.CallerName
+		if name == "" {
+			name = req.CallerAddress
+		}
+
+		if !s.Registry.Exists(req.CallerAddress) {
+			logs.Infof("registered peer from broadcast: %s at %s", name, req.CallerAddress)
+		}
+		s.Registry.Add(req.CallerAddress, name)
+	}
+
 	return &pb.BroadcastResponse{
 		Name:    s.ProjectConfig.Service.Name,
 		Address: s.selfAddress,

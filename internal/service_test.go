@@ -125,6 +125,101 @@ func TestService_Broadcast_DefaultValues(t *testing.T) {
 	}
 }
 
+func TestService_Broadcast_RegistersCaller(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "myhost:42069"
+
+	// Call Broadcast with caller info
+	_, err := svc.Broadcast(context.Background(), &pb.BroadcastRequest{
+		CallerName:    "remote-cache",
+		CallerAddress: "192.168.1.50:42069",
+		CallerVersion: "2.0.0",
+	})
+
+	if err != nil {
+		t.Fatalf("Broadcast() returned error: %v", err)
+	}
+
+	// Caller should be registered
+	if !svc.Registry.Exists("192.168.1.50:42069") {
+		t.Error("caller should have been registered")
+	}
+
+	peer, ok := svc.Registry.Get("192.168.1.50:42069")
+	if !ok {
+		t.Fatal("peer not found in registry")
+	}
+	if peer.Name != "remote-cache" {
+		t.Errorf("peer.Name = %q, want %q", peer.Name, "remote-cache")
+	}
+}
+
+func TestService_Broadcast_SkipsSelf(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "myhost:42069"
+
+	// Call Broadcast with our own address
+	_, err := svc.Broadcast(context.Background(), &pb.BroadcastRequest{
+		CallerName:    "self",
+		CallerAddress: "myhost:42069",
+		CallerVersion: "1.0.0",
+	})
+
+	if err != nil {
+		t.Fatalf("Broadcast() returned error: %v", err)
+	}
+
+	// Should not register ourselves
+	if svc.Registry.Exists("myhost:42069") {
+		t.Error("should not register self")
+	}
+}
+
+func TestService_Broadcast_EmptyCallerAddress(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	initialCount := svc.Registry.Count()
+
+	// Call Broadcast without caller info (empty request)
+	_, err := svc.Broadcast(context.Background(), &pb.BroadcastRequest{})
+
+	if err != nil {
+		t.Fatalf("Broadcast() returned error: %v", err)
+	}
+
+	// No peer should be added
+	if svc.Registry.Count() != initialCount {
+		t.Error("should not register peer with empty address")
+	}
+}
+
+func TestService_Broadcast_UsesAddressAsNameFallback(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "myhost:42069"
+
+	// Call Broadcast with address but no name
+	_, err := svc.Broadcast(context.Background(), &pb.BroadcastRequest{
+		CallerAddress: "192.168.1.100:42069",
+	})
+
+	if err != nil {
+		t.Fatalf("Broadcast() returned error: %v", err)
+	}
+
+	peer, ok := svc.Registry.Get("192.168.1.100:42069")
+	if !ok {
+		t.Fatal("peer not found in registry")
+	}
+	// Should use address as name when name is empty
+	if peer.Name != "192.168.1.100:42069" {
+		t.Errorf("peer.Name = %q, want %q", peer.Name, "192.168.1.100:42069")
+	}
+}
+
 func TestService_HealthCheck(t *testing.T) {
 	cfg := setupTestConfig()
 	svc := New(cfg)
@@ -247,7 +342,18 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 		Timeout:      time.Second,
 		MaxInstances: 1,
 	}
-	searchSystem := search.NewSystem(searchCfg, reg)
+	// Create a config with the search settings in ProjectProperties
+	testCfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	testCfg.ProjectProperties.Set("project", config.ProjectConfig{
+		Service: config.ServiceConfig{
+			Name:    "integration-test",
+			Version: "test-version",
+		},
+		Search: searchCfg,
+	})
+	searchSystem := search.NewSystem(testCfg, reg)
 
 	svc := &Service{
 		Config: cfg,
@@ -330,9 +436,7 @@ func TestService_Shutdown(t *testing.T) {
 
 	// Create a minimal service for shutdown test
 	reg := registry.New()
-	searchCfg := config.GetProjectConfig(cfg).Search
-	searchCfg.ScanInterval = time.Hour // Long interval
-	searchSystem := search.NewSystem(searchCfg, reg)
+	searchSystem := search.NewSystem(cfg, reg)
 
 	svc := &Service{
 		Config:        cfg,
