@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"net"
-	"os"
 	"testing"
 	"time"
 
@@ -12,16 +11,12 @@ import (
 	"github.com/keloran/distcache/internal/search"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
+	"github.com/keloran/go-config/local"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func setupTestConfig() *ConfigBuilder.Config {
-	// Clear env vars
-	os.Unsetenv("SERVICE_NAME")
-	os.Unsetenv("SERVICE_VERSION")
-	os.Unsetenv("GRPC_PORT")
-
 	cfg := &ConfigBuilder.Config{}
 	c := config.Configurator{}
 	c.Build(cfg)
@@ -45,23 +40,24 @@ func TestNew(t *testing.T) {
 	if svc.Search == nil {
 		t.Error("Search should be initialized")
 	}
-	if svc.selfAddress == "" {
-		t.Error("selfAddress should be set")
-	}
+	// selfAddress is set during Start(), not New()
 }
 
-func TestNew_SelfAddress(t *testing.T) {
+func TestService_UpdateSelfAddress(t *testing.T) {
 	cfg := setupTestConfig()
-
 	svc := New(cfg)
 
-	// selfAddress should contain the port
-	pc := config.GetProjectConfig(cfg)
-	expectedPort := pc.Search.Port
+	// Initially selfAddress should be empty
+	if svc.selfAddress != "" {
+		t.Errorf("selfAddress should be empty before Start(), got %q", svc.selfAddress)
+	}
 
-	// Check that selfAddress ends with the correct port
+	// Manually call updateSelfAddress
+	svc.updateSelfAddress(42069)
+
+	// Now it should be set
 	if svc.selfAddress == "" {
-		t.Fatal("selfAddress is empty")
+		t.Fatal("selfAddress is empty after updateSelfAddress")
 	}
 
 	// The address should contain the port
@@ -70,20 +66,18 @@ func TestNew_SelfAddress(t *testing.T) {
 		t.Fatalf("selfAddress %q is not a valid host:port: %v", svc.selfAddress, err)
 	}
 	if port != "42069" {
-		t.Errorf("port = %q, want %q (from default port %d)", port, "42069", expectedPort)
+		t.Errorf("port = %q, want %q", port, "42069")
 	}
 }
 
 func TestService_Broadcast(t *testing.T) {
-	// Set up custom config values
-	os.Setenv("SERVICE_NAME", "test-cache")
-	os.Setenv("SERVICE_VERSION", "1.2.3")
-	defer func() {
-		os.Unsetenv("SERVICE_NAME")
-		os.Unsetenv("SERVICE_VERSION")
-	}()
-
-	cfg := &ConfigBuilder.Config{}
+	// Set up config with custom values via ProjectProperties
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"SERVICE_NAME":    "test-cache",
+			"SERVICE_VERSION": "1.2.3",
+		},
+	}
 	config.Configurator{}.Build(cfg)
 
 	svc := New(cfg)
@@ -318,20 +312,6 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 	port := lis.Addr().(*net.TCPAddr).Port
 	lis.Close()
 
-	// Set up config with the available port
-	os.Setenv("GRPC_PORT", string(rune(port)))
-	os.Setenv("SERVICE_NAME", "integration-test")
-	os.Setenv("SERVICE_VERSION", "test-version")
-	defer func() {
-		os.Unsetenv("GRPC_PORT")
-		os.Unsetenv("SERVICE_NAME")
-		os.Unsetenv("SERVICE_VERSION")
-	}()
-
-	// Create service with custom port
-	cfg := &ConfigBuilder.Config{}
-	config.Configurator{}.Build(cfg)
-
 	// Manually create service components to avoid port conflicts
 	reg := registry.New()
 	searchCfg := config.SearchConfig{
@@ -356,7 +336,7 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 	searchSystem := search.NewSystem(testCfg, reg)
 
 	svc := &Service{
-		Config: cfg,
+		Config: testCfg,
 		ProjectConfig: config.ProjectConfig{
 			Service: config.ServiceConfig{
 				Name:    "integration-test",
@@ -366,7 +346,7 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 		},
 		Registry:    reg,
 		Search:      searchSystem,
-		selfAddress: "localhost:" + string(rune(port)),
+		selfAddress: "localhost:" + itoa(port),
 	}
 
 	// Start gRPC server
@@ -454,5 +434,102 @@ func TestService_Shutdown(t *testing.T) {
 	err := svc.shutdown(ctx)
 	if err != nil {
 		t.Errorf("shutdown() returned error: %v", err)
+	}
+}
+
+func TestService_PortCycling(t *testing.T) {
+	// Occupy a port
+	basePort := 43210
+	lis, err := net.Listen("tcp", ":"+itoa(basePort))
+	if err != nil {
+		t.Skipf("could not occupy port %d for test: %v", basePort, err)
+	}
+	defer lis.Close()
+
+	// Create config with the occupied port
+	cfg := &ConfigBuilder.Config{
+		Local: local.System{
+			GRPCPort: basePort,
+		},
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"MAX_PORT_RETRIES": 5,
+		},
+	}
+	config.Configurator{}.Build(cfg)
+
+	svc := New(cfg)
+
+	// Start in goroutine since Start() blocks
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- svc.Start()
+	}()
+
+	// Give service time to start and find a port
+	time.Sleep(100 * time.Millisecond)
+
+	// Service should be running on a different port
+	if svc.selfAddress == "" {
+		t.Fatal("selfAddress should be set after Start()")
+	}
+
+	_, port, err := net.SplitHostPort(svc.selfAddress)
+	if err != nil {
+		t.Fatalf("invalid selfAddress: %v", err)
+	}
+
+	// Port should be basePort + 1 since basePort is occupied
+	expectedPort := itoa(basePort + 1)
+	if port != expectedPort {
+		t.Errorf("port = %q, want %q (should have cycled from occupied port)", port, expectedPort)
+	}
+
+	// Cleanup
+	svc.grpcServer.GracefulStop()
+}
+
+func TestService_PortCycling_AllPortsTaken(t *testing.T) {
+	// Occupy multiple ports
+	basePort := 43220
+	maxRetries := 3
+	listeners := make([]net.Listener, maxRetries)
+
+	for i := 0; i < maxRetries; i++ {
+		lis, err := net.Listen("tcp", ":"+itoa(basePort+i))
+		if err != nil {
+			// Clean up already-opened listeners
+			for j := 0; j < i; j++ {
+				listeners[j].Close()
+			}
+			t.Skipf("could not occupy port %d for test: %v", basePort+i, err)
+		}
+		listeners[i] = lis
+	}
+	defer func() {
+		for _, lis := range listeners {
+			if lis != nil {
+				lis.Close()
+			}
+		}
+	}()
+
+	// Create config with the occupied port and limited retries
+	cfg := &ConfigBuilder.Config{
+		Local: local.System{
+			GRPCPort: basePort,
+		},
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"MAX_PORT_RETRIES": maxRetries,
+		},
+	}
+	config.Configurator{}.Build(cfg)
+
+	svc := New(cfg)
+
+	// Start should fail since all ports are taken
+	err := svc.Start()
+	if err == nil {
+		svc.grpcServer.GracefulStop()
+		t.Fatal("Start() should return error when all ports are taken")
 	}
 }

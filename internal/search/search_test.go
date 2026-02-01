@@ -596,3 +596,95 @@ func TestSystem_TryBroadcast_SendsCallerInfo(t *testing.T) {
 		t.Errorf("CallerVersion = %q, want %q", req.CallerVersion, "1.0.0")
 	}
 }
+
+func TestSystem_FindOthers_PredefinedServers(t *testing.T) {
+	// Start two mock servers
+	lis1, grpcServer1, port1 := startMockGRPCServer(t, "peer-1", "peer-1-addr:42069")
+	defer grpcServer1.GracefulStop()
+	defer lis1.Close()
+
+	lis2, grpcServer2, port2 := startMockGRPCServer(t, "peer-2", "peer-2-addr:42070")
+	defer grpcServer2.GracefulStop()
+	defer lis2.Close()
+
+	// Create config with predefined servers
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties.Set("project", config.ProjectConfig{
+		Service: config.ServiceConfig{
+			Name:    "testservice",
+			Version: "1.0.0",
+		},
+		Search: config.SearchConfig{
+			ServiceName:       "testservice",
+			Domains:           []string{".nonexistent.invalid"}, // No DNS discovery
+			Port:              42069,
+			ScanInterval:      time.Hour,
+			Timeout:           time.Second,
+			MaxInstances:      0,
+			MaxPortRetries:    1,
+			PredefinedServers: []string{
+				"127.0.0.1:" + itoa(port1),
+				"127.0.0.1:" + itoa(port2),
+			},
+		},
+	})
+
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress("192.168.1.100:42069") // Different from mock servers
+
+	ctx := context.Background()
+	sys.FindOthers(ctx)
+
+	// Both predefined servers should be discovered
+	if !reg.Exists("peer-1-addr:42069") {
+		t.Error("peer-1 should have been discovered via predefined servers")
+	}
+	if !reg.Exists("peer-2-addr:42070") {
+		t.Error("peer-2 should have been discovered via predefined servers")
+	}
+}
+
+func TestSystem_FindOthers_PredefinedServers_SkipsSelf(t *testing.T) {
+	// Start a mock server
+	lis, grpcServer, port := startMockGRPCServer(t, "peer", "peer-addr:42069")
+	defer grpcServer.GracefulStop()
+	defer lis.Close()
+
+	selfAddress := "127.0.0.1:" + itoa(port)
+
+	// Create config with self in predefined servers
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties.Set("project", config.ProjectConfig{
+		Service: config.ServiceConfig{
+			Name:    "testservice",
+			Version: "1.0.0",
+		},
+		Search: config.SearchConfig{
+			ServiceName:       "testservice",
+			Domains:           []string{".nonexistent.invalid"},
+			Port:              42069,
+			ScanInterval:      time.Hour,
+			Timeout:           time.Second,
+			MaxInstances:      0,
+			MaxPortRetries:    1,
+			PredefinedServers: []string{selfAddress}, // Self is in predefined
+		},
+	})
+
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+	sys.SetSelfAddress(selfAddress) // Same as predefined
+
+	ctx := context.Background()
+	sys.FindOthers(ctx)
+
+	// Should not register self
+	if reg.Count() != 0 {
+		t.Errorf("should not register self, got %d peers", reg.Count())
+	}
+}

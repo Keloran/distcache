@@ -80,6 +80,24 @@ func (s *System) FindOthers(ctx context.Context) {
 	var wg sync.WaitGroup
 
 	searchCfg := s.getSearchConfig()
+
+	// Probe predefined servers first (useful for testing and known peers)
+	for _, server := range searchCfg.PredefinedServers {
+		if server == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			// Skip ourselves
+			if addr == s.selfAddress {
+				return
+			}
+			s.tryBroadcast(ctx, addr, addr)
+		}(server)
+	}
+
+	// Probe domains for service discovery
 	for _, domain := range searchCfg.Domains {
 		// Try base service name (e.g., cacheservice.internal)
 		wg.Add(1)
@@ -132,7 +150,11 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			logs.Warnf("Failed to close grpc connection: %v", err)
+		}
+	}()
 
 	client := pb.NewCacheServiceClient(conn)
 	svcCfg := s.getServiceConfig()
@@ -187,7 +209,11 @@ func (s *System) healthCheck(ctx context.Context) {
 				logs.Infof("peer %s is unhealthy: %v", p.Address, err)
 				return
 			}
-			defer conn.Close()
+			defer func() {
+				if err := conn.Close(); err != nil {
+					logs.Warnf("failed to close connection to peer %s: %v", p.Address, err)
+				}
+			}()
 
 			client := pb.NewCacheServiceClient(conn)
 			_, err = client.Broadcast(ctx, &pb.BroadcastRequest{})
@@ -215,7 +241,11 @@ func (s *System) ProbeAddress(ctx context.Context, address string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			logs.Warnf("failed to close connection to peer %s: %v", s.selfAddress, err)
+		}
+	}()
 
 	client := pb.NewCacheServiceClient(conn)
 	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{})

@@ -1,24 +1,14 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	ConfigBuilder "github.com/keloran/go-config"
+	"github.com/keloran/go-config/local"
 )
 
 func TestConfigurator_Build_Defaults(t *testing.T) {
-	// Clear any env vars that might interfere
-	envVars := []string{
-		"SERVICE_NAME", "SERVICE_VERSION", "SEARCH_SERVICE_NAME",
-		"SEARCH_DOMAINS", "GRPC_PORT", "SEARCH_SCAN_INTERVAL",
-		"SEARCH_TIMEOUT", "SEARCH_MAX_INSTANCES",
-	}
-	for _, v := range envVars {
-		os.Unsetenv(v)
-	}
-
 	cfg := &ConfigBuilder.Config{}
 	c := Configurator{}
 
@@ -41,8 +31,13 @@ func TestConfigurator_Build_Defaults(t *testing.T) {
 	if pc.Search.ServiceName != DefaultServiceName {
 		t.Errorf("Search.ServiceName = %q, want %q", pc.Search.ServiceName, DefaultServiceName)
 	}
-	if pc.Search.Port != DefaultGRPCPort {
-		t.Errorf("Search.Port = %d, want %d", pc.Search.Port, DefaultGRPCPort)
+	// Port comes from cfg.Local.GRPCPort, defaults to 3000 in go-config
+	expectedPort := 3000
+	if cfg.Local.GRPCPort != 0 {
+		expectedPort = cfg.Local.GRPCPort
+	}
+	if pc.Search.Port != expectedPort {
+		t.Errorf("Search.Port = %d, want %d", pc.Search.Port, expectedPort)
 	}
 	if pc.Search.ScanInterval != DefaultScanInterval {
 		t.Errorf("Search.ScanInterval = %v, want %v", pc.Search.ScanInterval, DefaultScanInterval)
@@ -53,34 +48,34 @@ func TestConfigurator_Build_Defaults(t *testing.T) {
 	if pc.Search.MaxInstances != DefaultMaxInstances {
 		t.Errorf("Search.MaxInstances = %d, want %d", pc.Search.MaxInstances, DefaultMaxInstances)
 	}
+	if pc.Search.MaxPortRetries != DefaultMaxPortRetries {
+		t.Errorf("Search.MaxPortRetries = %d, want %d", pc.Search.MaxPortRetries, DefaultMaxPortRetries)
+	}
 	if len(pc.Search.Domains) != 1 || pc.Search.Domains[0] != DefaultDomains {
 		t.Errorf("Search.Domains = %v, want %v", pc.Search.Domains, []string{DefaultDomains})
 	}
+	if len(pc.Search.PredefinedServers) != 0 {
+		t.Errorf("Search.PredefinedServers = %v, want empty", pc.Search.PredefinedServers)
+	}
 }
 
-func TestConfigurator_Build_WithEnvVars(t *testing.T) {
-	// Set custom env vars
-	os.Setenv("SERVICE_NAME", "my-cache")
-	os.Setenv("SERVICE_VERSION", "2.0.0")
-	os.Setenv("SEARCH_SERVICE_NAME", "cache-search")
-	os.Setenv("SEARCH_DOMAINS", ".local,.internal,.cluster")
-	os.Setenv("GRPC_PORT", "50051")
-	os.Setenv("SEARCH_SCAN_INTERVAL", "1m")
-	os.Setenv("SEARCH_TIMEOUT", "10s")
-	os.Setenv("SEARCH_MAX_INSTANCES", "50")
-
-	defer func() {
-		os.Unsetenv("SERVICE_NAME")
-		os.Unsetenv("SERVICE_VERSION")
-		os.Unsetenv("SEARCH_SERVICE_NAME")
-		os.Unsetenv("SEARCH_DOMAINS")
-		os.Unsetenv("GRPC_PORT")
-		os.Unsetenv("SEARCH_SCAN_INTERVAL")
-		os.Unsetenv("SEARCH_TIMEOUT")
-		os.Unsetenv("SEARCH_MAX_INSTANCES")
-	}()
-
-	cfg := &ConfigBuilder.Config{}
+func TestConfigurator_Build_WithProjectProperties(t *testing.T) {
+	cfg := &ConfigBuilder.Config{
+		Local: local.System{
+			GRPCPort: 50051,
+		},
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"SERVICE_NAME":          "my-cache",
+			"SERVICE_VERSION":       "2.0.0",
+			"SEARCH_SERVICE_NAME":   "cache-search",
+			"SEARCH_DOMAINS":        ".local,.internal,.cluster",
+			"SEARCH_SCAN_INTERVAL":  "1m",
+			"SEARCH_TIMEOUT":        "10s",
+			"SEARCH_MAX_INSTANCES":  50,
+			"MAX_PORT_RETRIES":      5,
+			"PREDEFINED_SERVERS":    "localhost:42069,localhost:42070",
+		},
+	}
 	c := Configurator{}
 
 	err := c.Build(cfg)
@@ -111,6 +106,9 @@ func TestConfigurator_Build_WithEnvVars(t *testing.T) {
 	if pc.Search.MaxInstances != 50 {
 		t.Errorf("Search.MaxInstances = %d, want %d", pc.Search.MaxInstances, 50)
 	}
+	if pc.Search.MaxPortRetries != 5 {
+		t.Errorf("Search.MaxPortRetries = %d, want %d", pc.Search.MaxPortRetries, 5)
+	}
 
 	expectedDomains := []string{".local", ".internal", ".cluster"}
 	if len(pc.Search.Domains) != len(expectedDomains) {
@@ -122,23 +120,20 @@ func TestConfigurator_Build_WithEnvVars(t *testing.T) {
 			}
 		}
 	}
+
+	expectedServers := []string{"localhost:42069", "localhost:42070"}
+	if len(pc.Search.PredefinedServers) != len(expectedServers) {
+		t.Errorf("Search.PredefinedServers = %v, want %v", pc.Search.PredefinedServers, expectedServers)
+	}
 }
 
-func TestConfigurator_Build_InvalidEnvVars(t *testing.T) {
-	// Set invalid values - should fall back to defaults
-	os.Setenv("GRPC_PORT", "not-a-number")
-	os.Setenv("SEARCH_SCAN_INTERVAL", "invalid-duration")
-	os.Setenv("SEARCH_TIMEOUT", "bad")
-	os.Setenv("SEARCH_MAX_INSTANCES", "abc")
-
-	defer func() {
-		os.Unsetenv("GRPC_PORT")
-		os.Unsetenv("SEARCH_SCAN_INTERVAL")
-		os.Unsetenv("SEARCH_TIMEOUT")
-		os.Unsetenv("SEARCH_MAX_INSTANCES")
-	}()
-
-	cfg := &ConfigBuilder.Config{}
+func TestConfigurator_Build_InvalidDurationFallsBackToDefault(t *testing.T) {
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"SEARCH_SCAN_INTERVAL": "invalid-duration",
+			"SEARCH_TIMEOUT":       "bad",
+		},
+	}
 	c := Configurator{}
 
 	err := c.Build(cfg)
@@ -149,17 +144,32 @@ func TestConfigurator_Build_InvalidEnvVars(t *testing.T) {
 	pc := GetProjectConfig(cfg)
 
 	// Should use defaults when parsing fails
-	if pc.Search.Port != DefaultGRPCPort {
-		t.Errorf("Search.Port = %d, want %d (default)", pc.Search.Port, DefaultGRPCPort)
-	}
 	if pc.Search.ScanInterval != DefaultScanInterval {
 		t.Errorf("Search.ScanInterval = %v, want %v (default)", pc.Search.ScanInterval, DefaultScanInterval)
 	}
 	if pc.Search.Timeout != DefaultTimeout {
 		t.Errorf("Search.Timeout = %v, want %v (default)", pc.Search.Timeout, DefaultTimeout)
 	}
-	if pc.Search.MaxInstances != DefaultMaxInstances {
-		t.Errorf("Search.MaxInstances = %d, want %d (default)", pc.Search.MaxInstances, DefaultMaxInstances)
+}
+
+func TestConfigurator_Build_SearchServiceNameFallsBackToServiceName(t *testing.T) {
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: ConfigBuilder.ProjectProperties{
+			"SERVICE_NAME": "my-service",
+			// SEARCH_SERVICE_NAME not set - should fall back to SERVICE_NAME
+		},
+	}
+	c := Configurator{}
+
+	err := c.Build(cfg)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
+	}
+
+	pc := GetProjectConfig(cfg)
+
+	if pc.Search.ServiceName != "my-service" {
+		t.Errorf("Search.ServiceName = %q, want %q (should fall back to SERVICE_NAME)", pc.Search.ServiceName, "my-service")
 	}
 }
 
@@ -209,231 +219,23 @@ func TestGetProjectConfig_MissingKey(t *testing.T) {
 	}
 }
 
-func TestGetEnv(t *testing.T) {
-	tests := []struct {
-		name       string
-		key        string
-		envValue   string
-		defaultVal string
-		want       string
-	}{
-		{
-			name:       "env var set",
-			key:        "TEST_VAR_1",
-			envValue:   "custom-value",
-			defaultVal: "default",
-			want:       "custom-value",
-		},
-		{
-			name:       "env var not set",
-			key:        "TEST_VAR_2",
-			envValue:   "",
-			defaultVal: "default",
-			want:       "default",
-		},
-		{
-			name:       "env var empty string",
-			key:        "TEST_VAR_3",
-			envValue:   "",
-			defaultVal: "fallback",
-			want:       "fallback",
+func TestConfigurator_Build_ZeroPortUsesDefault(t *testing.T) {
+	cfg := &ConfigBuilder.Config{
+		Local: local.System{
+			GRPCPort: 0, // Zero should trigger default
 		},
 	}
+	c := Configurator{}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv(tt.key)
-			if tt.envValue != "" {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
-
-			got := getEnv(tt.key, tt.defaultVal)
-			if got != tt.want {
-				t.Errorf("getEnv(%q, %q) = %q, want %q", tt.key, tt.defaultVal, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetEnvInt(t *testing.T) {
-	tests := []struct {
-		name       string
-		key        string
-		envValue   string
-		defaultVal int
-		want       int
-	}{
-		{
-			name:       "valid int",
-			key:        "TEST_INT_1",
-			envValue:   "12345",
-			defaultVal: 0,
-			want:       12345,
-		},
-		{
-			name:       "invalid int",
-			key:        "TEST_INT_2",
-			envValue:   "not-a-number",
-			defaultVal: 100,
-			want:       100,
-		},
-		{
-			name:       "not set",
-			key:        "TEST_INT_3",
-			envValue:   "",
-			defaultVal: 42,
-			want:       42,
-		},
-		{
-			name:       "negative int",
-			key:        "TEST_INT_4",
-			envValue:   "-500",
-			defaultVal: 0,
-			want:       -500,
-		},
-		{
-			name:       "zero",
-			key:        "TEST_INT_5",
-			envValue:   "0",
-			defaultVal: 999,
-			want:       0,
-		},
+	err := c.Build(cfg)
+	if err != nil {
+		t.Fatalf("Build() returned error: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv(tt.key)
-			if tt.envValue != "" {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
+	pc := GetProjectConfig(cfg)
 
-			got := getEnvInt(tt.key, tt.defaultVal)
-			if got != tt.want {
-				t.Errorf("getEnvInt(%q, %d) = %d, want %d", tt.key, tt.defaultVal, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetEnvDuration(t *testing.T) {
-	tests := []struct {
-		name       string
-		key        string
-		envValue   string
-		defaultVal time.Duration
-		want       time.Duration
-	}{
-		{
-			name:       "valid duration seconds",
-			key:        "TEST_DUR_1",
-			envValue:   "30s",
-			defaultVal: time.Minute,
-			want:       30 * time.Second,
-		},
-		{
-			name:       "valid duration minutes",
-			key:        "TEST_DUR_2",
-			envValue:   "5m",
-			defaultVal: time.Second,
-			want:       5 * time.Minute,
-		},
-		{
-			name:       "invalid duration",
-			key:        "TEST_DUR_3",
-			envValue:   "invalid",
-			defaultVal: 10 * time.Second,
-			want:       10 * time.Second,
-		},
-		{
-			name:       "not set",
-			key:        "TEST_DUR_4",
-			envValue:   "",
-			defaultVal: time.Hour,
-			want:       time.Hour,
-		},
-		{
-			name:       "complex duration",
-			key:        "TEST_DUR_5",
-			envValue:   "1h30m45s",
-			defaultVal: time.Second,
-			want:       1*time.Hour + 30*time.Minute + 45*time.Second,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv(tt.key)
-			if tt.envValue != "" {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
-
-			got := getEnvDuration(tt.key, tt.defaultVal)
-			if got != tt.want {
-				t.Errorf("getEnvDuration(%q, %v) = %v, want %v", tt.key, tt.defaultVal, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetEnvSlice(t *testing.T) {
-	tests := []struct {
-		name       string
-		key        string
-		envValue   string
-		defaultVal []string
-		want       []string
-	}{
-		{
-			name:       "single value",
-			key:        "TEST_SLICE_1",
-			envValue:   ".internal",
-			defaultVal: []string{".default"},
-			want:       []string{".internal"},
-		},
-		{
-			name:       "multiple values",
-			key:        "TEST_SLICE_2",
-			envValue:   ".local,.internal,.cluster",
-			defaultVal: []string{".default"},
-			want:       []string{".local", ".internal", ".cluster"},
-		},
-		{
-			name:       "not set",
-			key:        "TEST_SLICE_3",
-			envValue:   "",
-			defaultVal: []string{".fallback1", ".fallback2"},
-			want:       []string{".fallback1", ".fallback2"},
-		},
-		{
-			name:       "empty segments",
-			key:        "TEST_SLICE_4",
-			envValue:   "a,,b",
-			defaultVal: []string{"default"},
-			want:       []string{"a", "", "b"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv(tt.key)
-			if tt.envValue != "" {
-				os.Setenv(tt.key, tt.envValue)
-				defer os.Unsetenv(tt.key)
-			}
-
-			got := getEnvSlice(tt.key, tt.defaultVal)
-			if len(got) != len(tt.want) {
-				t.Errorf("getEnvSlice(%q, %v) = %v, want %v", tt.key, tt.defaultVal, got, tt.want)
-				return
-			}
-			for i := range tt.want {
-				if got[i] != tt.want[i] {
-					t.Errorf("getEnvSlice(%q, %v)[%d] = %q, want %q", tt.key, tt.defaultVal, i, got[i], tt.want[i])
-				}
-			}
-		})
+	// Should use 3000 when GRPCPort is 0
+	if pc.Search.Port != 3000 {
+		t.Errorf("Search.Port = %d, want 3000", pc.Search.Port)
 	}
 }

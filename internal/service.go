@@ -30,36 +30,60 @@ type Service struct {
 func New(cfg *ConfigBuilder.Config) *Service {
 	pc := config.GetProjectConfig(cfg)
 	reg := registry.New()
-
-	// Determine our own address using the gRPC port
-	selfAddress := fmt.Sprintf(":%d", pc.Search.Port)
-	if hostname, err := os.Hostname(); err == nil {
-		selfAddress = fmt.Sprintf("%s:%d", hostname, pc.Search.Port)
-	}
-
 	searchSystem := search.NewSystem(cfg, reg)
-	searchSystem.SetSelfAddress(selfAddress)
 
 	return &Service{
 		Config:        cfg,
 		ProjectConfig: pc,
 		Registry:      reg,
 		Search:        searchSystem,
-		selfAddress:   selfAddress,
 	}
+}
+
+// updateSelfAddress updates the service's address and notifies the search system
+func (s *Service) updateSelfAddress(port int) {
+	s.selfAddress = fmt.Sprintf(":%d", port)
+	if hostname, err := os.Hostname(); err == nil {
+		s.selfAddress = fmt.Sprintf("%s:%d", hostname, port)
+	}
+	s.Search.SetSelfAddress(s.selfAddress)
 }
 
 func (s *Service) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	port := s.ProjectConfig.Search.Port
-
-	// Setup gRPC server
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return fmt.Errorf("failed to listen on port %d: %w", port, err)
+	basePort := s.ProjectConfig.Search.Port
+	maxRetries := s.ProjectConfig.Search.MaxPortRetries
+	if maxRetries <= 0 {
+		maxRetries = 1
 	}
+
+	// Try to find an available port
+	var lis net.Listener
+	var actualPort int
+	var err error
+
+	for i := 0; i < maxRetries; i++ {
+		tryPort := basePort + i
+		lis, err = net.Listen("tcp", fmt.Sprintf(":%d", tryPort))
+		if err == nil {
+			actualPort = tryPort
+			if i > 0 {
+				logs.Infof("port %d was taken, using port %d instead", basePort, actualPort)
+			}
+			break
+		}
+		logs.Infof("port %d is not available, trying next...", tryPort)
+	}
+
+	if lis == nil {
+		return fmt.Errorf("failed to find available port after %d attempts (tried %d-%d): %w",
+			maxRetries, basePort, basePort+maxRetries-1, err)
+	}
+
+	// Update our address now that we know the actual port
+	s.updateSelfAddress(actualPort)
 
 	s.grpcServer = grpc.NewServer()
 	pb.RegisterCacheServiceServer(s.grpcServer, s)
@@ -71,7 +95,7 @@ func (s *Service) Start() error {
 	// Start gRPC server in goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		logs.Infof("starting gRPC server on port %d", port)
+		logs.Infof("starting gRPC server on port %d", actualPort)
 		if err := s.grpcServer.Serve(lis); err != nil {
 			errChan <- err
 		}
