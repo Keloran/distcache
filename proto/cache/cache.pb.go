@@ -9,6 +9,7 @@ package cache
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -238,17 +239,10 @@ func (x *HealthCheckResponse) GetHealthyPeerCount() int32 {
 	return 0
 }
 
-// CacheValue represents a value that can be one of several types
+// CacheValue represents any JSON-compatible value
 type CacheValue struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Types that are valid to be assigned to Value:
-	//
-	//	*CacheValue_StringValue
-	//	*CacheValue_IntValue
-	//	*CacheValue_FloatValue
-	//	*CacheValue_BoolValue
-	//	*CacheValue_BytesValue
-	Value         isCacheValue_Value `protobuf_oneof:"value"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Value         *structpb.Value        `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -283,91 +277,12 @@ func (*CacheValue) Descriptor() ([]byte, []int) {
 	return file_proto_cache_cache_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *CacheValue) GetValue() isCacheValue_Value {
+func (x *CacheValue) GetValue() *structpb.Value {
 	if x != nil {
 		return x.Value
 	}
 	return nil
 }
-
-func (x *CacheValue) GetStringValue() string {
-	if x != nil {
-		if x, ok := x.Value.(*CacheValue_StringValue); ok {
-			return x.StringValue
-		}
-	}
-	return ""
-}
-
-func (x *CacheValue) GetIntValue() int64 {
-	if x != nil {
-		if x, ok := x.Value.(*CacheValue_IntValue); ok {
-			return x.IntValue
-		}
-	}
-	return 0
-}
-
-func (x *CacheValue) GetFloatValue() float64 {
-	if x != nil {
-		if x, ok := x.Value.(*CacheValue_FloatValue); ok {
-			return x.FloatValue
-		}
-	}
-	return 0
-}
-
-func (x *CacheValue) GetBoolValue() bool {
-	if x != nil {
-		if x, ok := x.Value.(*CacheValue_BoolValue); ok {
-			return x.BoolValue
-		}
-	}
-	return false
-}
-
-func (x *CacheValue) GetBytesValue() []byte {
-	if x != nil {
-		if x, ok := x.Value.(*CacheValue_BytesValue); ok {
-			return x.BytesValue
-		}
-	}
-	return nil
-}
-
-type isCacheValue_Value interface {
-	isCacheValue_Value()
-}
-
-type CacheValue_StringValue struct {
-	StringValue string `protobuf:"bytes,1,opt,name=string_value,json=stringValue,proto3,oneof"`
-}
-
-type CacheValue_IntValue struct {
-	IntValue int64 `protobuf:"varint,2,opt,name=int_value,json=intValue,proto3,oneof"`
-}
-
-type CacheValue_FloatValue struct {
-	FloatValue float64 `protobuf:"fixed64,3,opt,name=float_value,json=floatValue,proto3,oneof"`
-}
-
-type CacheValue_BoolValue struct {
-	BoolValue bool `protobuf:"varint,4,opt,name=bool_value,json=boolValue,proto3,oneof"`
-}
-
-type CacheValue_BytesValue struct {
-	BytesValue []byte `protobuf:"bytes,5,opt,name=bytes_value,json=bytesValue,proto3,oneof"` // For JSON or raw binary data
-}
-
-func (*CacheValue_StringValue) isCacheValue_Value() {}
-
-func (*CacheValue_IntValue) isCacheValue_Value() {}
-
-func (*CacheValue_FloatValue) isCacheValue_Value() {}
-
-func (*CacheValue_BoolValue) isCacheValue_Value() {}
-
-func (*CacheValue_BytesValue) isCacheValue_Value() {}
 
 type SetCacheRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -789,7 +704,7 @@ var File_proto_cache_cache_proto protoreflect.FileDescriptor
 
 const file_proto_cache_cache_proto_rawDesc = "" +
 	"\n" +
-	"\x17proto/cache/cache.proto\x12\x05cache\"\x81\x01\n" +
+	"\x17proto/cache/cache.proto\x12\x05cache\x1a\x1cgoogle/protobuf/struct.proto\"\x81\x01\n" +
 	"\x10BroadcastRequest\x12\x1f\n" +
 	"\vcaller_name\x18\x01 \x01(\tR\n" +
 	"callerName\x12%\n" +
@@ -804,18 +719,10 @@ const file_proto_cache_cache_proto_rawDesc = "" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x1d\n" +
 	"\n" +
 	"peer_count\x18\x02 \x01(\x05R\tpeerCount\x12,\n" +
-	"\x12healthy_peer_count\x18\x03 \x01(\x05R\x10healthyPeerCount\"\xc0\x01\n" +
+	"\x12healthy_peer_count\x18\x03 \x01(\x05R\x10healthyPeerCount\":\n" +
 	"\n" +
-	"CacheValue\x12#\n" +
-	"\fstring_value\x18\x01 \x01(\tH\x00R\vstringValue\x12\x1d\n" +
-	"\tint_value\x18\x02 \x01(\x03H\x00R\bintValue\x12!\n" +
-	"\vfloat_value\x18\x03 \x01(\x01H\x00R\n" +
-	"floatValue\x12\x1f\n" +
-	"\n" +
-	"bool_value\x18\x04 \x01(\bH\x00R\tboolValue\x12!\n" +
-	"\vbytes_value\x18\x05 \x01(\fH\x00R\n" +
-	"bytesValueB\a\n" +
-	"\x05value\"\xa7\x01\n" +
+	"CacheValue\x12,\n" +
+	"\x05value\x18\x01 \x01(\v2\x16.google.protobuf.ValueR\x05value\"\xa7\x01\n" +
 	"\x0fSetCacheRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12'\n" +
 	"\x05value\x18\x02 \x01(\v2\x11.cache.CacheValueR\x05value\x12.\n" +
@@ -876,41 +783,36 @@ var file_proto_cache_cache_proto_goTypes = []any{
 	(*SyncCacheRequest)(nil),    // 10: cache.SyncCacheRequest
 	(*SyncCacheResponse)(nil),   // 11: cache.SyncCacheResponse
 	(*SyncCacheEntry)(nil),      // 12: cache.SyncCacheEntry
+	(*structpb.Value)(nil),      // 13: google.protobuf.Value
 }
 var file_proto_cache_cache_proto_depIdxs = []int32{
-	4,  // 0: cache.SetCacheRequest.value:type_name -> cache.CacheValue
-	9,  // 1: cache.GetCacheResponse.entries:type_name -> cache.CacheEntry
-	4,  // 2: cache.CacheEntry.value:type_name -> cache.CacheValue
-	12, // 3: cache.SyncCacheResponse.entries:type_name -> cache.SyncCacheEntry
-	9,  // 4: cache.SyncCacheEntry.values:type_name -> cache.CacheEntry
-	0,  // 5: cache.CacheService.Broadcast:input_type -> cache.BroadcastRequest
-	2,  // 6: cache.CacheService.HealthCheck:input_type -> cache.HealthCheckRequest
-	5,  // 7: cache.CacheService.SetCache:input_type -> cache.SetCacheRequest
-	7,  // 8: cache.CacheService.GetCache:input_type -> cache.GetCacheRequest
-	10, // 9: cache.CacheService.SyncCache:input_type -> cache.SyncCacheRequest
-	1,  // 10: cache.CacheService.Broadcast:output_type -> cache.BroadcastResponse
-	3,  // 11: cache.CacheService.HealthCheck:output_type -> cache.HealthCheckResponse
-	6,  // 12: cache.CacheService.SetCache:output_type -> cache.SetCacheResponse
-	8,  // 13: cache.CacheService.GetCache:output_type -> cache.GetCacheResponse
-	11, // 14: cache.CacheService.SyncCache:output_type -> cache.SyncCacheResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	13, // 0: cache.CacheValue.value:type_name -> google.protobuf.Value
+	4,  // 1: cache.SetCacheRequest.value:type_name -> cache.CacheValue
+	9,  // 2: cache.GetCacheResponse.entries:type_name -> cache.CacheEntry
+	4,  // 3: cache.CacheEntry.value:type_name -> cache.CacheValue
+	12, // 4: cache.SyncCacheResponse.entries:type_name -> cache.SyncCacheEntry
+	9,  // 5: cache.SyncCacheEntry.values:type_name -> cache.CacheEntry
+	0,  // 6: cache.CacheService.Broadcast:input_type -> cache.BroadcastRequest
+	2,  // 7: cache.CacheService.HealthCheck:input_type -> cache.HealthCheckRequest
+	5,  // 8: cache.CacheService.SetCache:input_type -> cache.SetCacheRequest
+	7,  // 9: cache.CacheService.GetCache:input_type -> cache.GetCacheRequest
+	10, // 10: cache.CacheService.SyncCache:input_type -> cache.SyncCacheRequest
+	1,  // 11: cache.CacheService.Broadcast:output_type -> cache.BroadcastResponse
+	3,  // 12: cache.CacheService.HealthCheck:output_type -> cache.HealthCheckResponse
+	6,  // 13: cache.CacheService.SetCache:output_type -> cache.SetCacheResponse
+	8,  // 14: cache.CacheService.GetCache:output_type -> cache.GetCacheResponse
+	11, // 15: cache.CacheService.SyncCache:output_type -> cache.SyncCacheResponse
+	11, // [11:16] is the sub-list for method output_type
+	6,  // [6:11] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proto_cache_cache_proto_init() }
 func file_proto_cache_cache_proto_init() {
 	if File_proto_cache_cache_proto != nil {
 		return
-	}
-	file_proto_cache_cache_proto_msgTypes[4].OneofWrappers = []any{
-		(*CacheValue_StringValue)(nil),
-		(*CacheValue_IntValue)(nil),
-		(*CacheValue_FloatValue)(nil),
-		(*CacheValue_BoolValue)(nil),
-		(*CacheValue_BytesValue)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

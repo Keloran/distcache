@@ -13,7 +13,28 @@ import (
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func stringValue(s string) *pb.CacheValue {
+	return &pb.CacheValue{Value: structpb.NewStringValue(s)}
+}
+
+func intValue(i int64) *pb.CacheValue {
+	return &pb.CacheValue{Value: structpb.NewNumberValue(float64(i))}
+}
+
+func floatValue(f float64) *pb.CacheValue {
+	return &pb.CacheValue{Value: structpb.NewNumberValue(f)}
+}
+
+func boolValue(b bool) *pb.CacheValue {
+	return &pb.CacheValue{Value: structpb.NewBoolValue(b)}
+}
+
+func bytesValue(b []byte) *pb.CacheValue {
+	return &pb.CacheValue{Value: structpb.NewStringValue(string(b))}
+}
 
 func setupTestConfig() *ConfigBuilder.Config {
 	cfg := &ConfigBuilder.Config{
@@ -558,7 +579,7 @@ func TestService_SetCache(t *testing.T) {
 	ctx := context.Background()
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "test-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "test-value"}},
+		Value: stringValue("test-value"),
 	})
 
 	if err != nil {
@@ -579,8 +600,8 @@ func TestService_SetCache(t *testing.T) {
 	if len(getResp.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(getResp.Entries))
 	}
-	if getResp.Entries[0].Value.GetStringValue() != "test-value" {
-		t.Errorf("value = %q, want %q", getResp.Entries[0].Value.GetStringValue(), "test-value")
+	if getResp.Entries[0].Value.GetValue().GetStringValue() != "test-value" {
+		t.Errorf("value = %q, want %q", getResp.Entries[0].Value.GetValue().GetStringValue(), "test-value")
 	}
 }
 
@@ -593,7 +614,7 @@ func TestService_SetCache_WithTimestamp(t *testing.T) {
 	ctx := context.Background()
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:               "test-key",
-		Value:             &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "test-value"}},
+		Value:             stringValue("test-value"),
 		TimestampUnixNano: customTime.UnixNano(),
 	})
 
@@ -642,9 +663,9 @@ func TestService_SetCache_MultipleEntries(t *testing.T) {
 	ctx := context.Background()
 
 	// Add multiple entries for the same key
-	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "first"}}})
-	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "second"}}})
-	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "third"}}})
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: stringValue("first")})
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: stringValue("second")})
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: stringValue("third")})
 
 	getResp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "test-key"})
 	if err != nil {
@@ -666,7 +687,7 @@ func TestService_SetCache_FromReplication(t *testing.T) {
 	ctx := context.Background()
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:             "test-key",
-		Value:           &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "replicated-value"}},
+		Value:           stringValue("replicated-value"),
 		FromReplication: true, // Should not trigger re-replication
 	})
 
@@ -693,57 +714,57 @@ func TestService_SetCache_DifferentTypes(t *testing.T) {
 	// Test string
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "string-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "hello"}},
+		Value: stringValue("hello"),
 	})
 
 	// Test int
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "int-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_IntValue{IntValue: 42}},
+		Value: intValue(42),
 	})
 
 	// Test float
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "float-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_FloatValue{FloatValue: 3.14}},
+		Value: floatValue(3.14),
 	})
 
 	// Test bool
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "bool-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_BoolValue{BoolValue: true}},
+		Value: boolValue(true),
 	})
 
 	// Test bytes (JSON)
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "json-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_BytesValue{BytesValue: []byte(`{"name":"test"}`)}},
+		Value: bytesValue([]byte(`{"name":"test"}`)),
 	})
 
 	// Verify each type
 	stringResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "string-key"})
-	if stringResp.Entries[0].Value.GetStringValue() != "hello" {
-		t.Errorf("string value = %q, want %q", stringResp.Entries[0].Value.GetStringValue(), "hello")
+	if stringResp.Entries[0].Value.GetValue().GetStringValue() != "hello" {
+		t.Errorf("string value = %q, want %q", stringResp.Entries[0].Value.GetValue().GetStringValue(), "hello")
 	}
 
 	intResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "int-key"})
-	if intResp.Entries[0].Value.GetIntValue() != 42 {
-		t.Errorf("int value = %d, want 42", intResp.Entries[0].Value.GetIntValue())
+	if intResp.Entries[0].Value.GetValue().GetNumberValue() != 42 {
+		t.Errorf("int value = %v, want 42", intResp.Entries[0].Value.GetValue().GetNumberValue())
 	}
 
 	floatResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "float-key"})
-	if floatResp.Entries[0].Value.GetFloatValue() != 3.14 {
-		t.Errorf("float value = %f, want 3.14", floatResp.Entries[0].Value.GetFloatValue())
+	if floatResp.Entries[0].Value.GetValue().GetNumberValue() != 3.14 {
+		t.Errorf("float value = %f, want 3.14", floatResp.Entries[0].Value.GetValue().GetNumberValue())
 	}
 
 	boolResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "bool-key"})
-	if boolResp.Entries[0].Value.GetBoolValue() != true {
-		t.Errorf("bool value = %v, want true", boolResp.Entries[0].Value.GetBoolValue())
+	if boolResp.Entries[0].Value.GetValue().GetBoolValue() != true {
+		t.Errorf("bool value = %v, want true", boolResp.Entries[0].Value.GetValue().GetBoolValue())
 	}
 
 	jsonResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "json-key"})
-	if string(jsonResp.Entries[0].Value.GetBytesValue()) != `{"name":"test"}` {
-		t.Errorf("bytes value = %q, want %q", string(jsonResp.Entries[0].Value.GetBytesValue()), `{"name":"test"}`)
+	if jsonResp.Entries[0].Value.GetValue().GetStringValue() != `{"name":"test"}` {
+		t.Errorf("bytes value = %q, want %q", jsonResp.Entries[0].Value.GetValue().GetStringValue(), `{"name":"test"}`)
 	}
 }
 
@@ -777,15 +798,15 @@ func TestService_SyncCache_WithEntries(t *testing.T) {
 	// Add some cache entries
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "key1",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value1"}},
+		Value: stringValue("value1"),
 	})
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "key2",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_IntValue{IntValue: 42}},
+		Value: intValue(42),
 	})
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "key1", // Second entry for key1
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value1b"}},
+		Value: stringValue("value1b"),
 	})
 
 	resp, err := svc.SyncCache(ctx, &pb.SyncCacheRequest{})
@@ -831,9 +852,7 @@ func TestCache_ImportEntry(t *testing.T) {
 
 	// Directly import an entry (simulating sync)
 	timestamp := time.Now().Add(-5 * time.Second)
-	svc.Cache.ImportEntry("imported-key", &pb.CacheValue{
-		Value: &pb.CacheValue_StringValue{StringValue: "imported-value"},
-	}, timestamp)
+	svc.Cache.ImportEntry("imported-key", stringValue("imported-value"), timestamp)
 
 	// Verify it was imported
 	ctx := context.Background()
@@ -848,8 +867,8 @@ func TestCache_ImportEntry(t *testing.T) {
 	if len(resp.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(resp.Entries))
 	}
-	if resp.Entries[0].Value.GetStringValue() != "imported-value" {
-		t.Errorf("value = %q, want %q", resp.Entries[0].Value.GetStringValue(), "imported-value")
+	if resp.Entries[0].Value.GetValue().GetStringValue() != "imported-value" {
+		t.Errorf("value = %q, want %q", resp.Entries[0].Value.GetValue().GetStringValue(), "imported-value")
 	}
 }
 
@@ -896,7 +915,7 @@ func TestService_SetCache_EmptyKey(t *testing.T) {
 	// SetCache with empty key should still work
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+		Value: stringValue("value"),
 	})
 
 	if err != nil {
@@ -927,7 +946,7 @@ func TestService_GetCache_AfterTTLExpiry(t *testing.T) {
 	ctx := context.Background()
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "expiring-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "will-expire"}},
+		Value: stringValue("will-expire"),
 	})
 
 	// Wait for TTL to expire
@@ -958,7 +977,7 @@ func TestService_SyncCache_AfterTTLExpiry(t *testing.T) {
 	ctx := context.Background()
 	svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "expiring-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "will-expire"}},
+		Value: stringValue("will-expire"),
 	})
 
 	// Wait for TTL to expire
@@ -990,7 +1009,7 @@ func TestService_ReplicateToPeers_NoHealthyPeers(t *testing.T) {
 	// SetCache should succeed even with no healthy peers (just won't replicate)
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "no-replicate-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+		Value: stringValue("value"),
 	})
 
 	if err != nil {
@@ -1014,7 +1033,7 @@ func TestService_ReplicateToPeers_UnreachablePeer(t *testing.T) {
 	// SetCache should succeed locally even if replication fails
 	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
 		Key:   "replicate-fail-key",
-		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+		Value: stringValue("value"),
 	})
 
 	if err != nil {

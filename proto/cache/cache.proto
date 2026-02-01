@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package cache;
 
+import "google/protobuf/struct.proto";
+
 option go_package = "github.com/keloran/distcache/proto/cache";
 
 // CacheService handles inter-cache communication between nodes
@@ -43,15 +45,9 @@ message HealthCheckResponse {
   int32 healthy_peer_count = 3;
 }
 
-// CacheValue represents a value that can be one of several types
+// CacheValue represents any JSON-compatible value
 message CacheValue {
-  oneof value {
-    string string_value = 1;
-    int64 int_value = 2;
-    double float_value = 3;
-    bool bool_value = 4;
-    bytes bytes_value = 5; // For JSON or raw binary data
-  }
+  google.protobuf.Value value = 1;
 }
 
 message SetCacheRequest {

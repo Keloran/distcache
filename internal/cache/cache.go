@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bugfixes/go-bugfixes/logs"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
 )
@@ -70,6 +71,8 @@ func (s *System) CreateEntryWithTimestamp(value *pb.CacheValue, timestamp time.T
 		Timestamp: timestamp,
 		Value:     value,
 	}
+
+	logs.Infof("CreateEntryWithTimestamp %+v", cacheData)
 
 	s.Cache.mu.Lock()
 	defer s.Cache.mu.Unlock()
