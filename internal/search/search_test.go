@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -649,5 +650,205 @@ func TestSystem_FindOthers_PredefinedServers_SkipsSelf(t *testing.T) {
 	// Should not register self
 	if reg.Count() != 0 {
 		t.Errorf("should not register self, got %d peers", reg.Count())
+	}
+}
+
+// === UNHAPPY PATH TESTS ===
+
+func TestSystem_TryBroadcast_ConnectionRefused(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx := context.Background()
+
+	// Try to connect to a port that's not listening (should fail gracefully)
+	sys.tryBroadcast(ctx, "refused-host", "127.0.0.1:1") // Port 1 is typically not available
+
+	// Should not add peer on connection refused
+	if reg.Count() != 0 {
+		t.Errorf("Count() = %d, want 0 (connection should be refused)", reg.Count())
+	}
+}
+
+func TestSystem_FindOthers_EmptyPredefinedServers(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+		c.ProjectProperties["search_predefined_servers"] = []string{"", "", ""} // Empty strings
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx := context.Background()
+
+	// Should complete without error
+	sys.FindOthers(ctx)
+
+	// No peers should be added
+	if reg.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", reg.Count())
+	}
+}
+
+func TestSystem_HealthCheck_MultiplePeersAllFail(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_timeout"] = 50 * time.Millisecond
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	// Add multiple unreachable peers
+	reg.Add("10.255.255.1:42069", "peer1")
+	reg.Add("10.255.255.2:42069", "peer2")
+	reg.Add("10.255.255.3:42069", "peer3")
+
+	ctx := context.Background()
+	sys.healthCheck(ctx)
+
+	// All peers should be marked unhealthy
+	peers := reg.GetAll()
+	for _, peer := range peers {
+		if peer.Healthy {
+			t.Errorf("peer %s should be unhealthy", peer.Address)
+		}
+	}
+}
+
+func TestSystem_OnFirstPeerDiscovered_CallbackError(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	// Set a callback that returns an error
+	callCount := 0
+	sys.SetOnFirstPeerDiscovered(func(ctx context.Context, peerAddr string) error {
+		callCount++
+		return fmt.Errorf("sync failed")
+	})
+
+	// Start a mock gRPC server
+	lis, grpcServer, port := startMockGRPCServer(t, "peer-node", "192.168.1.1:42069")
+	defer grpcServer.GracefulStop()
+	defer lis.Close()
+
+	ctx := context.Background()
+	sys.SetSelfAddress("192.168.1.100:42069")
+	sys.tryBroadcast(ctx, "peer-host", "127.0.0.1:"+itoa(port))
+
+	// Callback should have been called
+	if callCount != 1 {
+		t.Errorf("callback should be called once, got %d", callCount)
+	}
+
+	// hasSynced should be reset on error (allowing retry)
+	sys.syncMu.Lock()
+	hasSynced := sys.hasSynced
+	sys.syncMu.Unlock()
+	if hasSynced {
+		t.Error("hasSynced should be reset after callback error")
+	}
+}
+
+func TestSystem_OnFirstPeerDiscovered_OnlyCalledOnce(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	// Set a callback that succeeds
+	callCount := 0
+	sys.SetOnFirstPeerDiscovered(func(ctx context.Context, peerAddr string) error {
+		callCount++
+		return nil
+	})
+
+	// Start two mock gRPC servers
+	lis1, grpcServer1, port1 := startMockGRPCServer(t, "peer-1", "192.168.1.1:42069")
+	defer grpcServer1.GracefulStop()
+	defer lis1.Close()
+
+	lis2, grpcServer2, port2 := startMockGRPCServer(t, "peer-2", "192.168.1.2:42069")
+	defer grpcServer2.GracefulStop()
+	defer lis2.Close()
+
+	ctx := context.Background()
+	sys.SetSelfAddress("192.168.1.100:42069")
+
+	// Discover first peer
+	sys.tryBroadcast(ctx, "peer-host-1", "127.0.0.1:"+itoa(port1))
+	// Discover second peer
+	sys.tryBroadcast(ctx, "peer-host-2", "127.0.0.1:"+itoa(port2))
+
+	// Callback should only be called once (for first peer)
+	if callCount != 1 {
+		t.Errorf("callback should be called once, got %d", callCount)
+	}
+}
+
+func TestSystem_Stop_DuringDiscovery(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_interval"] = 10 * time.Millisecond
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sys.Start(ctx)
+
+	// Immediately stop
+	done := make(chan struct{})
+	go func() {
+		sys.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - stopped without deadlock
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop() did not complete in time")
+	}
+}
+
+func TestSystem_ProbeService_DNSResolutionFailure(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx := context.Background()
+
+	// Probe a hostname that doesn't exist
+	sys.probeService(ctx, "this-host-definitely-does-not-exist.invalid")
+
+	// Should not panic and no peers should be added
+	if reg.Count() != 0 {
+		t.Errorf("Count() = %d, want 0", reg.Count())
+	}
+}
+
+func TestSystem_NilConfig(t *testing.T) {
+	// Create config with nil ProjectProperties
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: nil,
+	}
+	reg := registry.New()
+
+	// Should not panic
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("NewSystem panicked with nil ProjectProperties: %v", r)
+		}
+	}()
+
+	sys := NewSystem(cfg, reg)
+	if sys == nil {
+		t.Error("NewSystem should not return nil")
+	}
+
+	// Getters should return defaults
+	if sys.getServiceName() != "distcache" {
+		t.Errorf("getServiceName() = %q, want %q", sys.getServiceName(), "distcache")
 	}
 }

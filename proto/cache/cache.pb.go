@@ -637,6 +637,154 @@ func (x *CacheEntry) GetTimestampUnixNano() int64 {
 	return 0
 }
 
+type SyncCacheRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncCacheRequest) Reset() {
+	*x = SyncCacheRequest{}
+	mi := &file_proto_cache_cache_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncCacheRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncCacheRequest) ProtoMessage() {}
+
+func (x *SyncCacheRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_cache_cache_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncCacheRequest.ProtoReflect.Descriptor instead.
+func (*SyncCacheRequest) Descriptor() ([]byte, []int) {
+	return file_proto_cache_cache_proto_rawDescGZIP(), []int{10}
+}
+
+type SyncCacheResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*SyncCacheEntry      `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	TotalKeys     int32                  `protobuf:"varint,2,opt,name=total_keys,json=totalKeys,proto3" json:"total_keys,omitempty"`
+	TotalEntries  int32                  `protobuf:"varint,3,opt,name=total_entries,json=totalEntries,proto3" json:"total_entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncCacheResponse) Reset() {
+	*x = SyncCacheResponse{}
+	mi := &file_proto_cache_cache_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncCacheResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncCacheResponse) ProtoMessage() {}
+
+func (x *SyncCacheResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_cache_cache_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncCacheResponse.ProtoReflect.Descriptor instead.
+func (*SyncCacheResponse) Descriptor() ([]byte, []int) {
+	return file_proto_cache_cache_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SyncCacheResponse) GetEntries() []*SyncCacheEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *SyncCacheResponse) GetTotalKeys() int32 {
+	if x != nil {
+		return x.TotalKeys
+	}
+	return 0
+}
+
+func (x *SyncCacheResponse) GetTotalEntries() int32 {
+	if x != nil {
+		return x.TotalEntries
+	}
+	return 0
+}
+
+type SyncCacheEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Values        []*CacheEntry          `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SyncCacheEntry) Reset() {
+	*x = SyncCacheEntry{}
+	mi := &file_proto_cache_cache_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SyncCacheEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SyncCacheEntry) ProtoMessage() {}
+
+func (x *SyncCacheEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_cache_cache_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SyncCacheEntry.ProtoReflect.Descriptor instead.
+func (*SyncCacheEntry) Descriptor() ([]byte, []int) {
+	return file_proto_cache_cache_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SyncCacheEntry) GetKey() string {
+	if x != nil {
+		return x.Key
+	}
+	return ""
+}
+
+func (x *SyncCacheEntry) GetValues() []*CacheEntry {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
 var File_proto_cache_cache_proto protoreflect.FileDescriptor
 
 const file_proto_cache_cache_proto_rawDesc = "" +
@@ -684,12 +832,22 @@ const file_proto_cache_cache_proto_rawDesc = "" +
 	"\n" +
 	"CacheEntry\x12'\n" +
 	"\x05value\x18\x01 \x01(\v2\x11.cache.CacheValueR\x05value\x12.\n" +
-	"\x13timestamp_unix_nano\x18\x02 \x01(\x03R\x11timestampUnixNano2\x8e\x02\n" +
+	"\x13timestamp_unix_nano\x18\x02 \x01(\x03R\x11timestampUnixNano\"\x12\n" +
+	"\x10SyncCacheRequest\"\x88\x01\n" +
+	"\x11SyncCacheResponse\x12/\n" +
+	"\aentries\x18\x01 \x03(\v2\x15.cache.SyncCacheEntryR\aentries\x12\x1d\n" +
+	"\n" +
+	"total_keys\x18\x02 \x01(\x05R\ttotalKeys\x12#\n" +
+	"\rtotal_entries\x18\x03 \x01(\x05R\ftotalEntries\"M\n" +
+	"\x0eSyncCacheEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12)\n" +
+	"\x06values\x18\x02 \x03(\v2\x11.cache.CacheEntryR\x06values2\xce\x02\n" +
 	"\fCacheService\x12>\n" +
 	"\tBroadcast\x12\x17.cache.BroadcastRequest\x1a\x18.cache.BroadcastResponse\x12D\n" +
 	"\vHealthCheck\x12\x19.cache.HealthCheckRequest\x1a\x1a.cache.HealthCheckResponse\x12;\n" +
 	"\bSetCache\x12\x16.cache.SetCacheRequest\x1a\x17.cache.SetCacheResponse\x12;\n" +
-	"\bGetCache\x12\x16.cache.GetCacheRequest\x1a\x17.cache.GetCacheResponseB*Z(github.com/keloran/distcache/proto/cacheb\x06proto3"
+	"\bGetCache\x12\x16.cache.GetCacheRequest\x1a\x17.cache.GetCacheResponse\x12>\n" +
+	"\tSyncCache\x12\x17.cache.SyncCacheRequest\x1a\x18.cache.SyncCacheResponseB*Z(github.com/keloran/distcache/proto/cacheb\x06proto3"
 
 var (
 	file_proto_cache_cache_proto_rawDescOnce sync.Once
@@ -703,7 +861,7 @@ func file_proto_cache_cache_proto_rawDescGZIP() []byte {
 	return file_proto_cache_cache_proto_rawDescData
 }
 
-var file_proto_cache_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_proto_cache_cache_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_proto_cache_cache_proto_goTypes = []any{
 	(*BroadcastRequest)(nil),    // 0: cache.BroadcastRequest
 	(*BroadcastResponse)(nil),   // 1: cache.BroadcastResponse
@@ -715,24 +873,31 @@ var file_proto_cache_cache_proto_goTypes = []any{
 	(*GetCacheRequest)(nil),     // 7: cache.GetCacheRequest
 	(*GetCacheResponse)(nil),    // 8: cache.GetCacheResponse
 	(*CacheEntry)(nil),          // 9: cache.CacheEntry
+	(*SyncCacheRequest)(nil),    // 10: cache.SyncCacheRequest
+	(*SyncCacheResponse)(nil),   // 11: cache.SyncCacheResponse
+	(*SyncCacheEntry)(nil),      // 12: cache.SyncCacheEntry
 }
 var file_proto_cache_cache_proto_depIdxs = []int32{
-	4, // 0: cache.SetCacheRequest.value:type_name -> cache.CacheValue
-	9, // 1: cache.GetCacheResponse.entries:type_name -> cache.CacheEntry
-	4, // 2: cache.CacheEntry.value:type_name -> cache.CacheValue
-	0, // 3: cache.CacheService.Broadcast:input_type -> cache.BroadcastRequest
-	2, // 4: cache.CacheService.HealthCheck:input_type -> cache.HealthCheckRequest
-	5, // 5: cache.CacheService.SetCache:input_type -> cache.SetCacheRequest
-	7, // 6: cache.CacheService.GetCache:input_type -> cache.GetCacheRequest
-	1, // 7: cache.CacheService.Broadcast:output_type -> cache.BroadcastResponse
-	3, // 8: cache.CacheService.HealthCheck:output_type -> cache.HealthCheckResponse
-	6, // 9: cache.CacheService.SetCache:output_type -> cache.SetCacheResponse
-	8, // 10: cache.CacheService.GetCache:output_type -> cache.GetCacheResponse
-	7, // [7:11] is the sub-list for method output_type
-	3, // [3:7] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4,  // 0: cache.SetCacheRequest.value:type_name -> cache.CacheValue
+	9,  // 1: cache.GetCacheResponse.entries:type_name -> cache.CacheEntry
+	4,  // 2: cache.CacheEntry.value:type_name -> cache.CacheValue
+	12, // 3: cache.SyncCacheResponse.entries:type_name -> cache.SyncCacheEntry
+	9,  // 4: cache.SyncCacheEntry.values:type_name -> cache.CacheEntry
+	0,  // 5: cache.CacheService.Broadcast:input_type -> cache.BroadcastRequest
+	2,  // 6: cache.CacheService.HealthCheck:input_type -> cache.HealthCheckRequest
+	5,  // 7: cache.CacheService.SetCache:input_type -> cache.SetCacheRequest
+	7,  // 8: cache.CacheService.GetCache:input_type -> cache.GetCacheRequest
+	10, // 9: cache.CacheService.SyncCache:input_type -> cache.SyncCacheRequest
+	1,  // 10: cache.CacheService.Broadcast:output_type -> cache.BroadcastResponse
+	3,  // 11: cache.CacheService.HealthCheck:output_type -> cache.HealthCheckResponse
+	6,  // 12: cache.CacheService.SetCache:output_type -> cache.SetCacheResponse
+	8,  // 13: cache.CacheService.GetCache:output_type -> cache.GetCacheResponse
+	11, // 14: cache.CacheService.SyncCache:output_type -> cache.SyncCacheResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_proto_cache_cache_proto_init() }
@@ -753,7 +918,7 @@ func file_proto_cache_cache_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_cache_cache_proto_rawDesc), len(file_proto_cache_cache_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

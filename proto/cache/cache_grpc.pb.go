@@ -23,6 +23,7 @@ const (
 	CacheService_HealthCheck_FullMethodName = "/cache.CacheService/HealthCheck"
 	CacheService_SetCache_FullMethodName    = "/cache.CacheService/SetCache"
 	CacheService_GetCache_FullMethodName    = "/cache.CacheService/GetCache"
+	CacheService_SyncCache_FullMethodName   = "/cache.CacheService/SyncCache"
 )
 
 // CacheServiceClient is the client API for CacheService service.
@@ -39,6 +40,8 @@ type CacheServiceClient interface {
 	SetCache(ctx context.Context, in *SetCacheRequest, opts ...grpc.CallOption) (*SetCacheResponse, error)
 	// GetCache retrieves a cache entry
 	GetCache(ctx context.Context, in *GetCacheRequest, opts ...grpc.CallOption) (*GetCacheResponse, error)
+	// SyncCache returns all cache entries for synchronization
+	SyncCache(ctx context.Context, in *SyncCacheRequest, opts ...grpc.CallOption) (*SyncCacheResponse, error)
 }
 
 type cacheServiceClient struct {
@@ -89,6 +92,16 @@ func (c *cacheServiceClient) GetCache(ctx context.Context, in *GetCacheRequest, 
 	return out, nil
 }
 
+func (c *cacheServiceClient) SyncCache(ctx context.Context, in *SyncCacheRequest, opts ...grpc.CallOption) (*SyncCacheResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SyncCacheResponse)
+	err := c.cc.Invoke(ctx, CacheService_SyncCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CacheServiceServer is the server API for CacheService service.
 // All implementations must embed UnimplementedCacheServiceServer
 // for forward compatibility.
@@ -103,6 +116,8 @@ type CacheServiceServer interface {
 	SetCache(context.Context, *SetCacheRequest) (*SetCacheResponse, error)
 	// GetCache retrieves a cache entry
 	GetCache(context.Context, *GetCacheRequest) (*GetCacheResponse, error)
+	// SyncCache returns all cache entries for synchronization
+	SyncCache(context.Context, *SyncCacheRequest) (*SyncCacheResponse, error)
 	mustEmbedUnimplementedCacheServiceServer()
 }
 
@@ -124,6 +139,9 @@ func (UnimplementedCacheServiceServer) SetCache(context.Context, *SetCacheReques
 }
 func (UnimplementedCacheServiceServer) GetCache(context.Context, *GetCacheRequest) (*GetCacheResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCache not implemented")
+}
+func (UnimplementedCacheServiceServer) SyncCache(context.Context, *SyncCacheRequest) (*SyncCacheResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SyncCache not implemented")
 }
 func (UnimplementedCacheServiceServer) mustEmbedUnimplementedCacheServiceServer() {}
 func (UnimplementedCacheServiceServer) testEmbeddedByValue()                      {}
@@ -218,6 +236,24 @@ func _CacheService_GetCache_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CacheService_SyncCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncCacheRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CacheServiceServer).SyncCache(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CacheService_SyncCache_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CacheServiceServer).SyncCache(ctx, req.(*SyncCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CacheService_ServiceDesc is the grpc.ServiceDesc for CacheService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -240,6 +276,10 @@ var CacheService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCache",
 			Handler:    _CacheService_GetCache_Handler,
+		},
+		{
+			MethodName: "SyncCache",
+			Handler:    _CacheService_SyncCache_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

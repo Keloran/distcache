@@ -15,12 +15,19 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// PeerDiscoveredCallback is called when a new peer is discovered
+// The callback receives the peer address and should return an error if the sync fails
+type PeerDiscoveredCallback func(ctx context.Context, peerAddr string) error
+
 type System struct {
-	Config      *ConfigBuilder.Config
-	Registry    *registry.Registry
-	selfAddress string
-	stopChan    chan struct{}
-	wg          sync.WaitGroup
+	Config               *ConfigBuilder.Config
+	Registry             *registry.Registry
+	selfAddress          string
+	stopChan             chan struct{}
+	wg                   sync.WaitGroup
+	onFirstPeerDiscovered PeerDiscoveredCallback
+	hasSynced            bool
+	syncMu               sync.Mutex
 }
 
 func NewSystem(cfg *ConfigBuilder.Config, reg *registry.Registry) *System {
@@ -29,6 +36,12 @@ func NewSystem(cfg *ConfigBuilder.Config, reg *registry.Registry) *System {
 		Registry: reg,
 		stopChan: make(chan struct{}),
 	}
+}
+
+// SetOnFirstPeerDiscovered sets a callback that will be called when the first peer is discovered
+// This is typically used to sync the cache from an existing peer
+func (s *System) SetOnFirstPeerDiscovered(callback PeerDiscoveredCallback) {
+	s.onFirstPeerDiscovered = callback
 }
 
 // Helper methods to get config values from ProjectProperties
@@ -241,10 +254,32 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 		return
 	}
 
-	if !s.Registry.Exists(peerAddr) {
+	isNewPeer := !s.Registry.Exists(peerAddr)
+	if isNewPeer {
 		logs.Infof("discovered peer: %s at %s", name, peerAddr)
 	}
 	s.Registry.Add(peerAddr, name)
+
+	// If this is a new peer and we haven't synced yet, trigger sync
+	if isNewPeer && s.onFirstPeerDiscovered != nil {
+		s.syncMu.Lock()
+		shouldSync := !s.hasSynced
+		if shouldSync {
+			s.hasSynced = true
+		}
+		s.syncMu.Unlock()
+
+		if shouldSync {
+			logs.Infof("first peer discovered, syncing cache from %s...", peerAddr)
+			if err := s.onFirstPeerDiscovered(ctx, peerAddr); err != nil {
+				logs.Warnf("failed to sync cache from peer %s: %v", peerAddr, err)
+				// Reset so we can try again with another peer
+				s.syncMu.Lock()
+				s.hasSynced = false
+				s.syncMu.Unlock()
+			}
+		}
+	}
 }
 
 func (s *System) healthCheck(ctx context.Context) {

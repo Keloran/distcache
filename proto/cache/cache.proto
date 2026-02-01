@@ -17,6 +17,9 @@ service CacheService {
 
   // GetCache retrieves a cache entry
   rpc GetCache(GetCacheRequest) returns (GetCacheResponse);
+
+  // SyncCache returns all cache entries for synchronization
+  rpc SyncCache(SyncCacheRequest) returns (SyncCacheResponse);
 }
 
 message BroadcastRequest {
@@ -75,4 +78,17 @@ message GetCacheResponse {
 message CacheEntry {
   CacheValue value = 1;
   int64 timestamp_unix_nano = 2;
+}
+
+message SyncCacheRequest {}
+
+message SyncCacheResponse {
+  repeated SyncCacheEntry entries = 1;
+  int32 total_keys = 2;
+  int32 total_entries = 3;
+}
+
+message SyncCacheEntry {
+  string key = 1;
+  repeated CacheEntry values = 2;
 }

@@ -187,3 +187,38 @@ func (c *Cache) CleanAllExpired() {
 func (c *Cache) GetTTL() time.Duration {
 	return c.ttl
 }
+
+// GetAllEntries returns all non-expired entries in the cache, keyed by their cache key
+func (c *Cache) GetAllEntries() map[string][]*Data {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	now := time.Now()
+	result := make(map[string][]*Data)
+
+	for key, entries := range c.entries {
+		validEntries := make([]*Data, 0, len(entries))
+		for _, entry := range entries {
+			if c.ttl == 0 || now.Sub(entry.Timestamp) < c.ttl {
+				validEntries = append(validEntries, entry)
+			}
+		}
+		if len(validEntries) > 0 {
+			result[key] = validEntries
+		}
+	}
+
+	return result
+}
+
+// ImportEntry adds an entry directly (used for sync, skips TTL cleanup)
+func (c *Cache) ImportEntry(key string, value *pb.CacheValue, timestamp time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	data := &Data{
+		Timestamp: timestamp,
+		Value:     value,
+	}
+	c.entries[key] = append(c.entries[key], data)
+}

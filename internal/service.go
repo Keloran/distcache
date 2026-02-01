@@ -41,12 +41,17 @@ func New(cfg *ConfigBuilder.Config) *Service {
 	}
 	cacheSystem := cache.NewCache(ttl)
 
-	return &Service{
+	svc := &Service{
 		Config:   cfg,
 		Registry: reg,
 		Search:   searchSystem,
 		Cache:    cacheSystem,
 	}
+
+	// Register callback to sync cache when first peer is discovered
+	searchSystem.SetOnFirstPeerDiscovered(svc.SyncFromPeer)
+
+	return svc
 }
 
 // updateSelfAddress updates the service's address and notifies the search system
@@ -303,6 +308,74 @@ func (s *Service) replicateToPeer(ctx context.Context, addr, key string, value *
 	}
 
 	logs.Infof("replicated key %q to peer %s", key, addr)
+	return nil
+}
+
+// SyncCache implements the gRPC SyncCache RPC
+// Returns all cache entries for a new peer to synchronize
+func (s *Service) SyncCache(_ context.Context, _ *pb.SyncCacheRequest) (*pb.SyncCacheResponse, error) {
+	allEntries := s.Cache.GetAllEntries()
+
+	syncEntries := make([]*pb.SyncCacheEntry, 0, len(allEntries))
+	totalEntries := 0
+
+	for key, entries := range allEntries {
+		pbEntries := make([]*pb.CacheEntry, 0, len(entries))
+		for _, entry := range entries {
+			pbEntries = append(pbEntries, &pb.CacheEntry{
+				Value:             entry.Value,
+				TimestampUnixNano: entry.Timestamp.UnixNano(),
+			})
+		}
+		syncEntries = append(syncEntries, &pb.SyncCacheEntry{
+			Key:    key,
+			Values: pbEntries,
+		})
+		totalEntries += len(entries)
+	}
+
+	return &pb.SyncCacheResponse{
+		Entries:      syncEntries,
+		TotalKeys:    int32(len(allEntries)),
+		TotalEntries: int32(totalEntries),
+	}, nil
+}
+
+// SyncFromPeer requests the full cache from a peer and imports it
+func (s *Service) SyncFromPeer(ctx context.Context, peerAddr string) error {
+	timeout := 30 * time.Second // Longer timeout for full sync
+	if v, ok := s.Config.ProjectProperties["search_timeout"].(time.Duration); ok {
+		timeout = v * 6 // 6x normal timeout for sync
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	conn, err := grpc.NewClient(peerAddr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect to peer %s: %w", peerAddr, err)
+	}
+	defer conn.Close()
+
+	client := pb.NewCacheServiceClient(conn)
+	resp, err := client.SyncCache(ctx, &pb.SyncCacheRequest{})
+	if err != nil {
+		return fmt.Errorf("SyncCache failed: %w", err)
+	}
+
+	// Import all entries
+	imported := 0
+	for _, syncEntry := range resp.Entries {
+		for _, entry := range syncEntry.Values {
+			timestamp := time.Unix(0, entry.TimestampUnixNano)
+			s.Cache.ImportEntry(syncEntry.Key, entry.Value, timestamp)
+			imported++
+		}
+	}
+
+	logs.Infof("synced cache from peer %s: %d keys, %d entries", peerAddr, resp.TotalKeys, imported)
 	return nil
 }
 

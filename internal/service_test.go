@@ -746,3 +746,350 @@ func TestService_SetCache_DifferentTypes(t *testing.T) {
 		t.Errorf("bytes value = %q, want %q", string(jsonResp.Entries[0].Value.GetBytesValue()), `{"name":"test"}`)
 	}
 }
+
+func TestService_SyncCache_Empty(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	resp, err := svc.SyncCache(ctx, &pb.SyncCacheRequest{})
+
+	if err != nil {
+		t.Fatalf("SyncCache() returned error: %v", err)
+	}
+	if resp.TotalKeys != 0 {
+		t.Errorf("TotalKeys = %d, want 0", resp.TotalKeys)
+	}
+	if resp.TotalEntries != 0 {
+		t.Errorf("TotalEntries = %d, want 0", resp.TotalEntries)
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("len(Entries) = %d, want 0", len(resp.Entries))
+	}
+}
+
+func TestService_SyncCache_WithEntries(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+
+	// Add some cache entries
+	svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "key1",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value1"}},
+	})
+	svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "key2",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_IntValue{IntValue: 42}},
+	})
+	svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "key1", // Second entry for key1
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value1b"}},
+	})
+
+	resp, err := svc.SyncCache(ctx, &pb.SyncCacheRequest{})
+
+	if err != nil {
+		t.Fatalf("SyncCache() returned error: %v", err)
+	}
+	if resp.TotalKeys != 2 {
+		t.Errorf("TotalKeys = %d, want 2", resp.TotalKeys)
+	}
+	if resp.TotalEntries != 3 {
+		t.Errorf("TotalEntries = %d, want 3", resp.TotalEntries)
+	}
+
+	// Verify entries are present
+	foundKey1 := false
+	foundKey2 := false
+	for _, entry := range resp.Entries {
+		switch entry.Key {
+		case "key1":
+			foundKey1 = true
+			if len(entry.Values) != 2 {
+				t.Errorf("key1 should have 2 values, got %d", len(entry.Values))
+			}
+		case "key2":
+			foundKey2 = true
+			if len(entry.Values) != 1 {
+				t.Errorf("key2 should have 1 value, got %d", len(entry.Values))
+			}
+		}
+	}
+	if !foundKey1 {
+		t.Error("key1 not found in sync response")
+	}
+	if !foundKey2 {
+		t.Error("key2 not found in sync response")
+	}
+}
+
+func TestCache_ImportEntry(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	// Directly import an entry (simulating sync)
+	timestamp := time.Now().Add(-5 * time.Second)
+	svc.Cache.ImportEntry("imported-key", &pb.CacheValue{
+		Value: &pb.CacheValue_StringValue{StringValue: "imported-value"},
+	}, timestamp)
+
+	// Verify it was imported
+	ctx := context.Background()
+	resp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "imported-key"})
+
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if !resp.Found {
+		t.Error("imported key should be found")
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(resp.Entries))
+	}
+	if resp.Entries[0].Value.GetStringValue() != "imported-value" {
+		t.Errorf("value = %q, want %q", resp.Entries[0].Value.GetStringValue(), "imported-value")
+	}
+}
+
+// === UNHAPPY PATH TESTS ===
+
+func TestService_SyncFromPeer_ConnectionFailure(t *testing.T) {
+	cfg := setupTestConfig()
+	cfg.ProjectProperties["search_timeout"] = 100 * time.Millisecond // Short timeout for faster test
+	svc := New(cfg)
+
+	ctx := context.Background()
+	// Try to sync from a non-existent peer
+	err := svc.SyncFromPeer(ctx, "10.255.255.1:42069")
+
+	if err == nil {
+		t.Error("SyncFromPeer should return error for unreachable peer")
+	}
+}
+
+func TestService_SetCache_NilValue(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	// SetCache with nil value should still work (stores nil)
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "nil-key",
+		Value: nil,
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should succeed even with nil value")
+	}
+}
+
+func TestService_SetCache_EmptyKey(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	// SetCache with empty key should still work
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should succeed with empty key")
+	}
+
+	// Should be retrievable
+	getResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: ""})
+	if !getResp.Found {
+		t.Error("empty key should be retrievable")
+	}
+}
+
+func TestService_GetCache_AfterTTLExpiry(t *testing.T) {
+	// Create config with very short TTL
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties["service_name"] = "distcache"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["cache_ttl"] = 50 * time.Millisecond
+
+	svc := New(cfg)
+
+	ctx := context.Background()
+	svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "expiring-key",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "will-expire"}},
+	})
+
+	// Wait for TTL to expire
+	time.Sleep(60 * time.Millisecond)
+
+	// Entry should not be found
+	resp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "expiring-key"})
+
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if resp.Found {
+		t.Error("expired entry should not be found")
+	}
+}
+
+func TestService_SyncCache_AfterTTLExpiry(t *testing.T) {
+	// Create config with very short TTL
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties["service_name"] = "distcache"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["cache_ttl"] = 50 * time.Millisecond
+
+	svc := New(cfg)
+
+	ctx := context.Background()
+	svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "expiring-key",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "will-expire"}},
+	})
+
+	// Wait for TTL to expire
+	time.Sleep(60 * time.Millisecond)
+
+	// SyncCache should not include expired entries
+	resp, err := svc.SyncCache(ctx, &pb.SyncCacheRequest{})
+
+	if err != nil {
+		t.Fatalf("SyncCache() returned error: %v", err)
+	}
+	if resp.TotalKeys != 0 {
+		t.Errorf("expired entries should not be in sync response, got %d keys", resp.TotalKeys)
+	}
+}
+
+func TestService_ReplicateToPeers_NoHealthyPeers(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "localhost:42069"
+
+	// Add peers but mark them unhealthy
+	svc.Registry.Add("192.168.1.100:42069", "peer1")
+	svc.Registry.Add("192.168.1.101:42069", "peer2")
+	svc.Registry.MarkUnhealthy("192.168.1.100:42069")
+	svc.Registry.MarkUnhealthy("192.168.1.101:42069")
+
+	ctx := context.Background()
+	// SetCache should succeed even with no healthy peers (just won't replicate)
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "no-replicate-key",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should succeed even without healthy peers")
+	}
+}
+
+func TestService_ReplicateToPeers_UnreachablePeer(t *testing.T) {
+	cfg := setupTestConfig()
+	cfg.ProjectProperties["search_timeout"] = 100 * time.Millisecond // Short timeout
+	svc := New(cfg)
+	svc.selfAddress = "localhost:42069"
+
+	// Add an unreachable peer
+	svc.Registry.Add("10.255.255.1:42069", "unreachable-peer")
+
+	ctx := context.Background()
+	// SetCache should succeed locally even if replication fails
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "replicate-fail-key",
+		Value: &pb.CacheValue{Value: &pb.CacheValue_StringValue{StringValue: "value"}},
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should succeed locally even if replication fails")
+	}
+
+	// Peer should be marked unhealthy after failed replication
+	time.Sleep(150 * time.Millisecond) // Wait for replication attempt
+	peer, _ := svc.Registry.Get("10.255.255.1:42069")
+	if peer.Healthy {
+		t.Error("unreachable peer should be marked unhealthy after failed replication")
+	}
+}
+
+func TestService_Broadcast_InvalidCallerAddress(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "localhost:42069"
+
+	ctx := context.Background()
+	// Broadcast with invalid address format should not crash
+	resp, err := svc.Broadcast(ctx, &pb.BroadcastRequest{
+		CallerName:    "peer",
+		CallerAddress: "not-a-valid-address",
+	})
+
+	if err != nil {
+		t.Fatalf("Broadcast() returned error: %v", err)
+	}
+	if resp == nil {
+		t.Error("Broadcast should return response")
+	}
+
+	// The peer should be registered (we don't validate address format)
+	if !svc.Registry.Exists("not-a-valid-address") {
+		t.Error("peer should be registered even with unusual address")
+	}
+}
+
+func TestService_HealthCheck_NoPeers(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	resp, err := svc.HealthCheck(ctx, &pb.HealthCheckRequest{})
+
+	if err != nil {
+		t.Fatalf("HealthCheck() returned error: %v", err)
+	}
+	if !resp.Healthy {
+		t.Error("service should be healthy even with no peers")
+	}
+	if resp.PeerCount != 0 {
+		t.Errorf("PeerCount = %d, want 0", resp.PeerCount)
+	}
+	if resp.HealthyPeerCount != 0 {
+		t.Errorf("HealthyPeerCount = %d, want 0", resp.HealthyPeerCount)
+	}
+}
+
+func TestService_New_DefaultTTL(t *testing.T) {
+	// Config without cache_ttl should use default
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+
+	svc := New(cfg)
+
+	if svc.Cache == nil {
+		t.Fatal("Cache should be initialized")
+	}
+	if svc.Cache.GetTTL() != 10*time.Second {
+		t.Errorf("Default TTL = %v, want 10s", svc.Cache.GetTTL())
+	}
+}
