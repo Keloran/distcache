@@ -24,16 +24,17 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	}
 
 	type SearchConfig struct {
-		ServiceName       string        `env:"SERVICE_NAME" envDefault:"distcache"`
-		Domains           []string      `env:"SERVICE_DOMAINS" envSeparator:"," envDefault:".internal"`
-		Port              int           `env:"SERVICE_PORT" envDefault:"42069"`
-		ScanInterval      time.Duration `env:"SERVICE_SCAN_INTERVAL" envDefault:"30s"`
-		Timeout           time.Duration `env:"SERVICE_TIMEOUT" envDefault:"5s"`
-		MaxInstances      int           `env:"SERVICE_MAX_INSTANCES" envDefault:"100"`
-		MaxPortRetries    int           `env:"PORT_RETRIES" envDefault:"10"`
-		PredefinedServers []string      `env:"PREDEFINED_SERVERS" envSeparator:","`
-		IPRanges          []string      `env:"SEARCH_IP_RANGES" envSeparator:","`
-		ScanOwnRange      bool          `env:"SEARCH_SCAN_OWN_RANGE" envDefault:"false"`
+		ServiceName             string        `env:"SERVICE_NAME" envDefault:"distcache"`
+		Domains                 []string      `env:"SERVICE_DOMAINS" envSeparator:"," envDefault:".internal"`
+		Port                    int           `env:"SERVICE_PORT" envDefault:"42069"`
+		ScanInterval            time.Duration `env:"SERVICE_SCAN_INTERVAL" envDefault:"30s"`
+		Timeout                 time.Duration `env:"SERVICE_TIMEOUT" envDefault:"5s"`
+		MaxInstances            int           `env:"SERVICE_MAX_INSTANCES" envDefault:"100"`
+		MaxPortRetries          int           `env:"PORT_RETRIES" envDefault:"10"`
+		PredefinedServers       []string      `env:"PREDEFINED_SERVERS" envSeparator:","`
+		IPRanges                []string      `env:"SEARCH_IP_RANGES" envSeparator:","`
+		ScanOwnRange            bool          `env:"SEARCH_SCAN_OWN_RANGE" envDefault:"false"`
+		ActiveDiscoveryDuration time.Duration `env:"SEARCH_ACTIVE_DISCOVERY_DURATION" envDefault:"1m"`
 	}
 
 	type CacheConfig struct {
@@ -74,6 +75,7 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	cfg.ProjectProperties["search_predefined_servers"] = search.PredefinedServers
 	cfg.ProjectProperties["search_ip_ranges"] = search.IPRanges
 	cfg.ProjectProperties["search_scan_own_range"] = search.ScanOwnRange
+	cfg.ProjectProperties["search_active_discovery_duration"] = search.ActiveDiscoveryDuration
 
 	// Cache properties
 	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL

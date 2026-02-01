@@ -1133,6 +1133,53 @@ func TestGetLocalIP(t *testing.T) {
 	}
 }
 
+func TestSystem_GetActiveDiscoveryDuration(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_active_discovery_duration"] = 5 * time.Minute
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	duration := sys.getActiveDiscoveryDuration()
+	if duration != 5*time.Minute {
+		t.Errorf("getActiveDiscoveryDuration() = %v, want 5m", duration)
+	}
+}
+
+func TestSystem_GetActiveDiscoveryDuration_Default(t *testing.T) {
+	cfg := defaultTestConfig()
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	duration := sys.getActiveDiscoveryDuration()
+	if duration != time.Minute {
+		t.Errorf("getActiveDiscoveryDuration() = %v, want 1m (default)", duration)
+	}
+}
+
+func TestSystem_DiscoveryLoop_StopsActiveDiscovery(t *testing.T) {
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_interval"] = 20 * time.Millisecond
+		c.ProjectProperties["search_active_discovery_duration"] = 50 * time.Millisecond
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
+	})
+	reg := registry.New()
+	sys := NewSystem(cfg, reg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	sys.Start(ctx)
+
+	// Wait for active discovery to end (50ms) plus a couple scan intervals
+	time.Sleep(120 * time.Millisecond)
+
+	cancel()
+	sys.Stop()
+
+	// Test passes if no panic/deadlock occurred
+}
+
 func TestSystem_FindOthers_ScanOwnRange(t *testing.T) {
 	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
 		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}

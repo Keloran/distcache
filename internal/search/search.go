@@ -109,6 +109,13 @@ func (s *System) getScanOwnRange() bool {
 	return false
 }
 
+func (s *System) getActiveDiscoveryDuration() time.Duration {
+	if v, ok := s.Config.ProjectProperties["search_active_discovery_duration"].(time.Duration); ok {
+		return v
+	}
+	return time.Minute // Default: stop active discovery after 1 minute
+}
+
 // getLocalIP returns the local non-loopback IPv4 address
 func getLocalIP() net.IP {
 	addrs, err := net.InterfaceAddrs()
@@ -181,6 +188,10 @@ func (s *System) discoveryLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.getScanInterval())
 	defer ticker.Stop()
 
+	startTime := time.Now()
+	activeDiscoveryDuration := s.getActiveDiscoveryDuration()
+	activeDiscovery := true
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -188,7 +199,18 @@ func (s *System) discoveryLoop(ctx context.Context) {
 		case <-s.stopChan:
 			return
 		case <-ticker.C:
-			s.FindOthers(ctx)
+			// Check if active discovery period has ended
+			if activeDiscovery && time.Since(startTime) >= activeDiscoveryDuration {
+				activeDiscovery = false
+				logs.Infof("active discovery period ended after %v, waiting for peers to find us", activeDiscoveryDuration)
+			}
+
+			// Only actively search for peers during the active discovery period
+			if activeDiscovery {
+				s.FindOthers(ctx)
+			}
+
+			// Always perform health checks on known peers
 			s.healthCheck(ctx)
 		}
 	}
