@@ -6,14 +6,18 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
+	"github.com/keloran/distcache/internal/cache"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Service struct {
@@ -21,6 +25,7 @@ type Service struct {
 	Config      *ConfigBuilder.Config
 	Registry    *registry.Registry
 	Search      *search.System
+	Cache       *cache.Cache
 	grpcServer  *grpc.Server
 	selfAddress string
 }
@@ -29,10 +34,18 @@ func New(cfg *ConfigBuilder.Config) *Service {
 	reg := registry.New()
 	searchSystem := search.NewSystem(cfg, reg)
 
+	// Get cache TTL from config
+	ttl := 10 * time.Second
+	if v, ok := cfg.ProjectProperties["cache_ttl"].(time.Duration); ok {
+		ttl = v
+	}
+	cacheSystem := cache.NewCache(ttl)
+
 	return &Service{
 		Config:   cfg,
 		Registry: reg,
 		Search:   searchSystem,
+		Cache:    cacheSystem,
 	}
 }
 
@@ -178,6 +191,119 @@ func (s *Service) HealthCheck(_ context.Context, _ *pb.HealthCheckRequest) (*pb.
 		PeerCount:        int32(s.Registry.Count()),
 		HealthyPeerCount: int32(len(s.Registry.GetHealthy())),
 	}, nil
+}
+
+// SetCache implements the gRPC SetCache RPC
+// When a client sets a cache entry, we store it locally and replicate to peers
+func (s *Service) SetCache(ctx context.Context, req *pb.SetCacheRequest) (*pb.SetCacheResponse, error) {
+	// Convert timestamp
+	timestamp := time.Unix(0, req.TimestampUnixNano)
+	if req.TimestampUnixNano == 0 {
+		timestamp = time.Now()
+	}
+
+	// Store locally
+	cacheSystem := cache.New(s.Config, req.Key, s.Cache)
+	cacheSystem.CreateEntryWithTimestamp(req.Value, timestamp)
+
+	logs.Infof("cached key %q (from_replication=%v)", req.Key, req.FromReplication)
+
+	// If this is not from replication, replicate to all peers
+	if !req.FromReplication {
+		s.replicateToPeers(ctx, req.Key, req.Value, timestamp)
+	}
+
+	return &pb.SetCacheResponse{
+		Success: true,
+	}, nil
+}
+
+// GetCache implements the gRPC GetCache RPC
+func (s *Service) GetCache(_ context.Context, req *pb.GetCacheRequest) (*pb.GetCacheResponse, error) {
+	cacheSystem := cache.New(s.Config, req.Key, s.Cache)
+	entries := cacheSystem.GetEntries()
+
+	if len(entries) == 0 {
+		return &pb.GetCacheResponse{
+			Found:   false,
+			Entries: nil,
+		}, nil
+	}
+
+	pbEntries := make([]*pb.CacheEntry, 0, len(entries))
+	for _, entry := range entries {
+		pbEntries = append(pbEntries, &pb.CacheEntry{
+			Value:             entry.Content,
+			TimestampUnixNano: entry.Timestamp.UnixNano(),
+		})
+	}
+
+	return &pb.GetCacheResponse{
+		Found:   true,
+		Entries: pbEntries,
+	}, nil
+}
+
+// replicateToPeers sends the cache entry to all healthy peers
+func (s *Service) replicateToPeers(ctx context.Context, key string, value []byte, timestamp time.Time) {
+	peers := s.Registry.GetHealthy()
+	if len(peers) == 0 {
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, peer := range peers {
+		// Skip ourselves
+		if peer.Address == s.selfAddress {
+			continue
+		}
+
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+
+			if err := s.replicateToPeer(ctx, addr, key, value, timestamp); err != nil {
+				logs.Warnf("failed to replicate to peer %s: %v", addr, err)
+				s.Registry.MarkUnhealthy(addr)
+			}
+		}(peer.Address)
+	}
+
+	wg.Wait()
+}
+
+// replicateToPeer sends a cache entry to a single peer
+func (s *Service) replicateToPeer(ctx context.Context, addr, key string, value []byte, timestamp time.Time) error {
+	// Use a timeout for replication
+	timeout := 5 * time.Second
+	if v, ok := s.Config.ProjectProperties["search_timeout"].(time.Duration); ok {
+		timeout = v
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	conn, err := grpc.NewClient(addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewCacheServiceClient(conn)
+	_, err = client.SetCache(ctx, &pb.SetCacheRequest{
+		Key:               key,
+		Value:             value,
+		TimestampUnixNano: timestamp.UnixNano(),
+		FromReplication:   true, // Mark as replication to prevent re-replication
+	})
+	if err != nil {
+		return fmt.Errorf("SetCache failed: %w", err)
+	}
+
+	logs.Infof("replicated key %q to peer %s", key, addr)
+	return nil
 }
 
 // GetLocalIP attempts to determine the local IP address

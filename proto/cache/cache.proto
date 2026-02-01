@@ -11,6 +11,12 @@ service CacheService {
 
   // HealthCheck checks if a peer is healthy
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+
+  // SetCache replicates a cache entry from a peer
+  rpc SetCache(SetCacheRequest) returns (SetCacheResponse);
+
+  // GetCache retrieves a cache entry
+  rpc GetCache(GetCacheRequest) returns (GetCacheResponse);
 }
 
 message BroadcastRequest {
@@ -32,4 +38,30 @@ message HealthCheckResponse {
   bool healthy = 1;
   int32 peer_count = 2;
   int32 healthy_peer_count = 3;
+}
+
+message SetCacheRequest {
+  string key = 1;
+  bytes value = 2;
+  int64 timestamp_unix_nano = 3;
+  bool from_replication = 4; // true if this is a replication from another node (don't re-replicate)
+}
+
+message SetCacheResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetCacheRequest {
+  string key = 1;
+}
+
+message GetCacheResponse {
+  bool found = 1;
+  repeated CacheEntry entries = 2;
+}
+
+message CacheEntry {
+  bytes value = 1;
+  int64 timestamp_unix_nano = 2;
 }

@@ -34,6 +34,10 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 		PredefinedServers []string      `env:"PREDEFINED_SERVERS" envSeparator:","`
 	}
 
+	type CacheConfig struct {
+		TTL time.Duration `env:"CACHE_TTL" envDefault:"10s"`
+	}
+
 	var service ServiceConfig
 	if err := env.Parse(&service); err != nil {
 		return logs.Errorf("failed to parse service config: %v", err)
@@ -42,6 +46,11 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	var search SearchConfig
 	if err := env.Parse(&search); err != nil {
 		return logs.Errorf("failed to parse search config: %v", err)
+	}
+
+	var cacheConf CacheConfig
+	if err := env.Parse(&cacheConf); err != nil {
+		return logs.Errorf("failed to parse cache config: %v", err)
 	}
 
 	if cfg.ProjectProperties == nil {
@@ -61,6 +70,9 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	cfg.ProjectProperties["search_max_instances"] = search.MaxInstances
 	cfg.ProjectProperties["search_max_port_retries"] = search.MaxPortRetries
 	cfg.ProjectProperties["search_predefined_servers"] = search.PredefinedServers
+
+	// Cache properties
+	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL
 
 	return nil
 }

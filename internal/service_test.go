@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/keloran/distcache/internal/cache"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
 	pb "github.com/keloran/distcache/proto/cache"
@@ -28,6 +29,7 @@ func setupTestConfig() *ConfigBuilder.Config {
 	cfg.ProjectProperties["search_max_instances"] = 100
 	cfg.ProjectProperties["search_max_port_retries"] = 10
 	cfg.ProjectProperties["search_predefined_servers"] = []string{}
+	cfg.ProjectProperties["cache_ttl"] = 10 * time.Second
 	return cfg
 }
 
@@ -47,6 +49,9 @@ func TestNew(t *testing.T) {
 	}
 	if svc.Search == nil {
 		t.Error("Search should be initialized")
+	}
+	if svc.Cache == nil {
+		t.Error("Cache should be initialized")
 	}
 	// selfAddress is set during Start(), not New()
 }
@@ -342,11 +347,13 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 
 	reg := registry.New()
 	searchSystem := search.NewSystem(testCfg, reg)
+	cacheSystem := cache.NewCache(10 * time.Second)
 
 	svc := &Service{
 		Config:      testCfg,
 		Registry:    reg,
 		Search:      searchSystem,
+		Cache:       cacheSystem,
 		selfAddress: "localhost:" + itoa(port),
 	}
 
@@ -418,11 +425,13 @@ func TestService_Shutdown(t *testing.T) {
 	// Create a minimal service for shutdown test
 	reg := registry.New()
 	searchSystem := search.NewSystem(cfg, reg)
+	cacheSystem := cache.NewCache(10 * time.Second)
 
 	svc := &Service{
 		Config:     cfg,
 		Registry:   reg,
 		Search:     searchSystem,
+		Cache:      cacheSystem,
 		grpcServer: grpc.NewServer(),
 	}
 
@@ -539,5 +548,138 @@ func TestService_PortCycling_AllPortsTaken(t *testing.T) {
 	if err == nil {
 		svc.grpcServer.GracefulStop()
 		t.Fatal("Start() should return error when all ports are taken")
+	}
+}
+
+func TestService_SetCache(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:   "test-key",
+		Value: []byte("test-value"),
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should return success=true")
+	}
+
+	// Verify the entry was stored
+	getResp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "test-key"})
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if !getResp.Found {
+		t.Error("GetCache should find the entry")
+	}
+	if len(getResp.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(getResp.Entries))
+	}
+	if string(getResp.Entries[0].Value) != "test-value" {
+		t.Errorf("value = %q, want %q", string(getResp.Entries[0].Value), "test-value")
+	}
+}
+
+func TestService_SetCache_WithTimestamp(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	// Use a recent timestamp that won't be expired by TTL
+	customTime := time.Now().Add(-1 * time.Second)
+	ctx := context.Background()
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:               "test-key",
+		Value:             []byte("test-value"),
+		TimestampUnixNano: customTime.UnixNano(),
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should return success=true")
+	}
+
+	// Verify the timestamp was preserved
+	getResp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "test-key"})
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if len(getResp.Entries) == 0 {
+		t.Fatal("expected at least 1 entry")
+	}
+	if getResp.Entries[0].TimestampUnixNano != customTime.UnixNano() {
+		t.Errorf("timestamp = %d, want %d", getResp.Entries[0].TimestampUnixNano, customTime.UnixNano())
+	}
+}
+
+func TestService_GetCache_NotFound(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+	resp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "missing-key"})
+
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if resp.Found {
+		t.Error("GetCache should return found=false for missing key")
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("expected 0 entries, got %d", len(resp.Entries))
+	}
+}
+
+func TestService_SetCache_MultipleEntries(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+
+	ctx := context.Background()
+
+	// Add multiple entries for the same key
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: []byte("first")})
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: []byte("second")})
+	svc.SetCache(ctx, &pb.SetCacheRequest{Key: "test-key", Value: []byte("third")})
+
+	getResp, err := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "test-key"})
+	if err != nil {
+		t.Fatalf("GetCache() returned error: %v", err)
+	}
+	if len(getResp.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(getResp.Entries))
+	}
+}
+
+func TestService_SetCache_FromReplication(t *testing.T) {
+	cfg := setupTestConfig()
+	svc := New(cfg)
+	svc.selfAddress = "localhost:42069"
+
+	// Add a mock peer
+	svc.Registry.Add("192.168.1.100:42069", "peer")
+
+	ctx := context.Background()
+	resp, err := svc.SetCache(ctx, &pb.SetCacheRequest{
+		Key:             "test-key",
+		Value:           []byte("replicated-value"),
+		FromReplication: true, // Should not trigger re-replication
+	})
+
+	if err != nil {
+		t.Fatalf("SetCache() returned error: %v", err)
+	}
+	if !resp.Success {
+		t.Error("SetCache should return success=true")
+	}
+
+	// Entry should be stored
+	getResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "test-key"})
+	if !getResp.Found {
+		t.Error("entry should be stored")
 	}
 }
