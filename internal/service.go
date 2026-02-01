@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/bugfixes/go-bugfixes/logs"
-	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
 	pb "github.com/keloran/distcache/proto/cache"
@@ -19,24 +18,21 @@ import (
 
 type Service struct {
 	pb.UnimplementedCacheServiceServer
-	Config        *ConfigBuilder.Config
-	ProjectConfig config.ProjectConfig
-	Registry      *registry.Registry
-	Search        *search.System
-	grpcServer    *grpc.Server
-	selfAddress   string
+	Config      *ConfigBuilder.Config
+	Registry    *registry.Registry
+	Search      *search.System
+	grpcServer  *grpc.Server
+	selfAddress string
 }
 
 func New(cfg *ConfigBuilder.Config) *Service {
-	pc := config.GetProjectConfig(cfg)
 	reg := registry.New()
 	searchSystem := search.NewSystem(cfg, reg)
 
 	return &Service{
-		Config:        cfg,
-		ProjectConfig: pc,
-		Registry:      reg,
-		Search:        searchSystem,
+		Config:   cfg,
+		Registry: reg,
+		Search:   searchSystem,
 	}
 }
 
@@ -49,12 +45,41 @@ func (s *Service) updateSelfAddress(port int) {
 	s.Search.SetSelfAddress(s.selfAddress)
 }
 
+// Helper methods to get config values from ProjectProperties
+func (s *Service) getServiceName() string {
+	if v, ok := s.Config.ProjectProperties["service_name"].(string); ok {
+		return v
+	}
+	return "distcache"
+}
+
+func (s *Service) getServiceVersion() string {
+	if v, ok := s.Config.ProjectProperties["service_version"].(string); ok {
+		return v
+	}
+	return "1.0.0"
+}
+
+func (s *Service) getPort() int {
+	if v, ok := s.Config.ProjectProperties["search_port"].(int); ok {
+		return v
+	}
+	return 42069
+}
+
+func (s *Service) getMaxPortRetries() int {
+	if v, ok := s.Config.ProjectProperties["search_max_port_retries"].(int); ok {
+		return v
+	}
+	return 10
+}
+
 func (s *Service) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	basePort := s.ProjectConfig.Search.Port
-	maxRetries := s.ProjectConfig.Search.MaxPortRetries
+	basePort := s.getPort()
+	maxRetries := s.getMaxPortRetries()
 	if maxRetries <= 0 {
 		maxRetries = 1
 	}
@@ -140,9 +165,9 @@ func (s *Service) Broadcast(_ context.Context, req *pb.BroadcastRequest) (*pb.Br
 	}
 
 	return &pb.BroadcastResponse{
-		Name:    s.ProjectConfig.Service.Name,
+		Name:    s.getServiceName(),
 		Address: s.selfAddress,
-		Version: s.ProjectConfig.Service.Version,
+		Version: s.getServiceVersion(),
 	}, nil
 }
 

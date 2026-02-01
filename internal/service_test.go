@@ -6,20 +6,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	"github.com/keloran/distcache/internal/search"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
-	"github.com/keloran/go-config/local"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func setupTestConfig() *ConfigBuilder.Config {
-	cfg := &ConfigBuilder.Config{}
-	c := config.Configurator{}
-	c.Build(cfg)
+	cfg := &ConfigBuilder.Config{
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
+	}
+	cfg.ProjectProperties["service_name"] = "distcache"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "distcache"
+	cfg.ProjectProperties["search_domains"] = []string{".internal"}
+	cfg.ProjectProperties["search_port"] = 42069
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = 5 * time.Second
+	cfg.ProjectProperties["search_max_instances"] = 100
+	cfg.ProjectProperties["search_max_port_retries"] = 10
+	cfg.ProjectProperties["search_predefined_servers"] = []string{}
 	return cfg
 }
 
@@ -71,14 +79,19 @@ func TestService_UpdateSelfAddress(t *testing.T) {
 }
 
 func TestService_Broadcast(t *testing.T) {
-	// Set up config with custom values via ProjectProperties
 	cfg := &ConfigBuilder.Config{
-		ProjectProperties: ConfigBuilder.ProjectProperties{
-			"SERVICE_NAME":    "test-cache",
-			"SERVICE_VERSION": "1.2.3",
-		},
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	config.Configurator{}.Build(cfg)
+	cfg.ProjectProperties["service_name"] = "test-cache"
+	cfg.ProjectProperties["service_version"] = "1.2.3"
+	cfg.ProjectProperties["search_service_name"] = "test-cache"
+	cfg.ProjectProperties["search_domains"] = []string{".internal"}
+	cfg.ProjectProperties["search_port"] = 42069
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = 5 * time.Second
+	cfg.ProjectProperties["search_max_instances"] = 100
+	cfg.ProjectProperties["search_max_port_retries"] = 10
+	cfg.ProjectProperties["search_predefined_servers"] = []string{}
 
 	svc := New(cfg)
 	svc.selfAddress = "testhost:42069"
@@ -111,8 +124,8 @@ func TestService_Broadcast_DefaultValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Broadcast() returned error: %v", err)
 	}
-	if resp.Name != config.DefaultServiceName {
-		t.Errorf("Name = %q, want %q", resp.Name, config.DefaultServiceName)
+	if resp.Name != "distcache" {
+		t.Errorf("Name = %q, want %q", resp.Name, "distcache")
 	}
 	if resp.Version != "1.0.0" {
 		t.Errorf("Version = %q, want %q", resp.Version, "1.0.0")
@@ -312,38 +325,26 @@ func TestService_GRPCServer_Integration(t *testing.T) {
 	port := lis.Addr().(*net.TCPAddr).Port
 	lis.Close()
 
-	// Manually create service components to avoid port conflicts
-	reg := registry.New()
-	searchCfg := config.SearchConfig{
-		Port:         port,
-		ServiceName:  "integration-test",
-		Domains:      []string{".test"},
-		ScanInterval: time.Hour, // Long interval to avoid discovery during test
-		Timeout:      time.Second,
-		MaxInstances: 1,
-	}
-	// Create a config with the search settings in ProjectProperties
+	// Create config with test settings
 	testCfg := &ConfigBuilder.Config{
 		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	testCfg.ProjectProperties.Set("project", config.ProjectConfig{
-		Service: config.ServiceConfig{
-			Name:    "integration-test",
-			Version: "test-version",
-		},
-		Search: searchCfg,
-	})
+	testCfg.ProjectProperties["service_name"] = "integration-test"
+	testCfg.ProjectProperties["service_version"] = "test-version"
+	testCfg.ProjectProperties["search_service_name"] = "integration-test"
+	testCfg.ProjectProperties["search_domains"] = []string{".test"}
+	testCfg.ProjectProperties["search_port"] = port
+	testCfg.ProjectProperties["search_scan_interval"] = time.Hour // Long interval to avoid discovery during test
+	testCfg.ProjectProperties["search_timeout"] = time.Second
+	testCfg.ProjectProperties["search_max_instances"] = 1
+	testCfg.ProjectProperties["search_max_port_retries"] = 1
+	testCfg.ProjectProperties["search_predefined_servers"] = []string{}
+
+	reg := registry.New()
 	searchSystem := search.NewSystem(testCfg, reg)
 
 	svc := &Service{
-		Config: testCfg,
-		ProjectConfig: config.ProjectConfig{
-			Service: config.ServiceConfig{
-				Name:    "integration-test",
-				Version: "test-version",
-			},
-			Search: searchCfg,
-		},
+		Config:      testCfg,
 		Registry:    reg,
 		Search:      searchSystem,
 		selfAddress: "localhost:" + itoa(port),
@@ -419,11 +420,10 @@ func TestService_Shutdown(t *testing.T) {
 	searchSystem := search.NewSystem(cfg, reg)
 
 	svc := &Service{
-		Config:        cfg,
-		ProjectConfig: config.GetProjectConfig(cfg),
-		Registry:      reg,
-		Search:        searchSystem,
-		grpcServer:    grpc.NewServer(),
+		Config:     cfg,
+		Registry:   reg,
+		Search:     searchSystem,
+		grpcServer: grpc.NewServer(),
 	}
 
 	// Start search system
@@ -448,14 +448,18 @@ func TestService_PortCycling(t *testing.T) {
 
 	// Create config with the occupied port
 	cfg := &ConfigBuilder.Config{
-		Local: local.System{
-			GRPCPort: basePort,
-		},
-		ProjectProperties: ConfigBuilder.ProjectProperties{
-			"MAX_PORT_RETRIES": 5,
-		},
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	config.Configurator{}.Build(cfg)
+	cfg.ProjectProperties["service_name"] = "distcache"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "distcache"
+	cfg.ProjectProperties["search_domains"] = []string{".internal"}
+	cfg.ProjectProperties["search_port"] = basePort
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = 5 * time.Second
+	cfg.ProjectProperties["search_max_instances"] = 100
+	cfg.ProjectProperties["search_max_port_retries"] = 5
+	cfg.ProjectProperties["search_predefined_servers"] = []string{}
 
 	svc := New(cfg)
 
@@ -515,14 +519,18 @@ func TestService_PortCycling_AllPortsTaken(t *testing.T) {
 
 	// Create config with the occupied port and limited retries
 	cfg := &ConfigBuilder.Config{
-		Local: local.System{
-			GRPCPort: basePort,
-		},
-		ProjectProperties: ConfigBuilder.ProjectProperties{
-			"MAX_PORT_RETRIES": maxRetries,
-		},
+		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	config.Configurator{}.Build(cfg)
+	cfg.ProjectProperties["service_name"] = "distcache"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "distcache"
+	cfg.ProjectProperties["search_domains"] = []string{".internal"}
+	cfg.ProjectProperties["search_port"] = basePort
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = 5 * time.Second
+	cfg.ProjectProperties["search_max_instances"] = 100
+	cfg.ProjectProperties["search_max_port_retries"] = maxRetries
+	cfg.ProjectProperties["search_predefined_servers"] = []string{}
 
 	svc := New(cfg)
 

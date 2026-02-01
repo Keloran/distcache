@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
-	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
@@ -32,12 +31,68 @@ func NewSystem(cfg *ConfigBuilder.Config, reg *registry.Registry) *System {
 	}
 }
 
-func (s *System) getSearchConfig() config.SearchConfig {
-	return config.GetProjectConfig(s.Config).Search
+// Helper methods to get config values from ProjectProperties
+func (s *System) getServiceName() string {
+	if v, ok := s.Config.ProjectProperties["search_service_name"].(string); ok {
+		return v
+	}
+	return "distcache"
 }
 
-func (s *System) getServiceConfig() config.ServiceConfig {
-	return config.GetProjectConfig(s.Config).Service
+func (s *System) getDomains() []string {
+	if v, ok := s.Config.ProjectProperties["search_domains"].([]string); ok {
+		return v
+	}
+	return []string{".internal"}
+}
+
+func (s *System) getPort() int {
+	if v, ok := s.Config.ProjectProperties["search_port"].(int); ok {
+		return v
+	}
+	return 42069
+}
+
+func (s *System) getScanInterval() time.Duration {
+	if v, ok := s.Config.ProjectProperties["search_scan_interval"].(time.Duration); ok {
+		return v
+	}
+	return 30 * time.Second
+}
+
+func (s *System) getTimeout() time.Duration {
+	if v, ok := s.Config.ProjectProperties["search_timeout"].(time.Duration); ok {
+		return v
+	}
+	return 5 * time.Second
+}
+
+func (s *System) getMaxInstances() int {
+	if v, ok := s.Config.ProjectProperties["search_max_instances"].(int); ok {
+		return v
+	}
+	return 100
+}
+
+func (s *System) getPredefinedServers() []string {
+	if v, ok := s.Config.ProjectProperties["search_predefined_servers"].([]string); ok {
+		return v
+	}
+	return nil
+}
+
+func (s *System) getCallerName() string {
+	if v, ok := s.Config.ProjectProperties["service_name"].(string); ok {
+		return v
+	}
+	return "distcache"
+}
+
+func (s *System) getCallerVersion() string {
+	if v, ok := s.Config.ProjectProperties["service_version"].(string); ok {
+		return v
+	}
+	return "1.0.0"
 }
 
 func (s *System) SetSelfAddress(addr string) {
@@ -60,7 +115,7 @@ func (s *System) discoveryLoop(ctx context.Context) {
 	// Initial discovery
 	s.FindOthers(ctx)
 
-	ticker := time.NewTicker(s.getSearchConfig().ScanInterval)
+	ticker := time.NewTicker(s.getScanInterval())
 	defer ticker.Stop()
 
 	for {
@@ -79,10 +134,13 @@ func (s *System) discoveryLoop(ctx context.Context) {
 func (s *System) FindOthers(ctx context.Context) {
 	var wg sync.WaitGroup
 
-	searchCfg := s.getSearchConfig()
+	serviceName := s.getServiceName()
+	domains := s.getDomains()
+	maxInstances := s.getMaxInstances()
+	predefinedServers := s.getPredefinedServers()
 
 	// Probe predefined servers first (useful for testing and known peers)
-	for _, server := range searchCfg.PredefinedServers {
+	for _, server := range predefinedServers {
 		if server == "" {
 			continue
 		}
@@ -98,20 +156,20 @@ func (s *System) FindOthers(ctx context.Context) {
 	}
 
 	// Probe domains for service discovery
-	for _, domain := range searchCfg.Domains {
+	for _, domain := range domains {
 		// Try base service name (e.g., cacheservice.internal)
 		wg.Add(1)
 		go func(d string) {
 			defer wg.Done()
-			s.probeService(ctx, fmt.Sprintf("%s%s", searchCfg.ServiceName, d))
+			s.probeService(ctx, fmt.Sprintf("%s%s", serviceName, d))
 		}(domain)
 
 		// Try numbered instances (e.g., cacheservice-1.internal, cacheservice-2.internal)
-		for i := 0; i <= searchCfg.MaxInstances; i++ {
+		for i := 0; i <= maxInstances; i++ {
 			wg.Add(1)
 			go func(d string, num int) {
 				defer wg.Done()
-				hostname := fmt.Sprintf("%s-%d%s", searchCfg.ServiceName, num, d)
+				hostname := fmt.Sprintf("%s-%d%s", serviceName, num, d)
 				s.probeService(ctx, hostname)
 			}(domain, i)
 		}
@@ -128,8 +186,9 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 		return
 	}
 
+	port := s.getPort()
 	for _, ip := range ips {
-		address := fmt.Sprintf("%s:%d", ip, s.getSearchConfig().Port)
+		address := fmt.Sprintf("%s:%d", ip, port)
 
 		// Skip ourselves
 		if address == s.selfAddress {
@@ -141,7 +200,7 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 }
 
 func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
-	ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.getTimeout())
 	defer cancel()
 
 	conn, err := grpc.NewClient(address,
@@ -157,11 +216,10 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	}()
 
 	client := pb.NewCacheServiceClient(conn)
-	svcCfg := s.getServiceConfig()
 	broadcastResp, err := client.Broadcast(ctx, &pb.BroadcastRequest{
-		CallerName:    svcCfg.Name,
+		CallerName:    s.getCallerName(),
 		CallerAddress: s.selfAddress,
-		CallerVersion: svcCfg.Version,
+		CallerVersion: s.getCallerVersion(),
 	})
 	if err != nil {
 		return
@@ -198,7 +256,7 @@ func (s *System) healthCheck(ctx context.Context) {
 		go func(p *registry.Peer) {
 			defer wg.Done()
 
-			ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
+			ctx, cancel := context.WithTimeout(ctx, s.getTimeout())
 			defer cancel()
 
 			conn, err := grpc.NewClient(p.Address,
@@ -232,7 +290,7 @@ func (s *System) healthCheck(ctx context.Context) {
 
 // ProbeAddress allows manual probing of a specific address
 func (s *System) ProbeAddress(ctx context.Context, address string) error {
-	ctx, cancel := context.WithTimeout(ctx, s.getSearchConfig().Timeout)
+	ctx, cancel := context.WithTimeout(ctx, s.getTimeout())
 	defer cancel()
 
 	conn, err := grpc.NewClient(address,

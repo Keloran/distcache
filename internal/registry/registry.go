@@ -6,10 +6,10 @@ import (
 )
 
 type Peer struct {
-	Address   string
-	Name      string
-	LastSeen  time.Time
-	Healthy   bool
+	Address  string
+	Name     string
+	LastSeen time.Time
+	Healthy  bool
 }
 
 type Registry struct {

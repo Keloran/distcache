@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/keloran/distcache/internal/config"
 	"github.com/keloran/distcache/internal/registry"
 	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
@@ -18,45 +17,23 @@ func defaultTestConfig() *ConfigBuilder.Config {
 	cfg := &ConfigBuilder.Config{
 		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	cfg.ProjectProperties.Set("project", config.ProjectConfig{
-		Service: config.ServiceConfig{
-			Name:    "testservice",
-			Version: "1.0.0",
-		},
-		Search: config.SearchConfig{
-			ServiceName:  "testservice",
-			Domains:      []string{".test"},
-			Port:         42069,
-			ScanInterval: time.Hour, // Long interval to prevent auto-discovery
-			Timeout:      100 * time.Millisecond,
-			MaxInstances: 5,
-		},
-	})
+	cfg.ProjectProperties["service_name"] = "testservice"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "testservice"
+	cfg.ProjectProperties["search_domains"] = []string{".test"}
+	cfg.ProjectProperties["search_port"] = 42069
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour // Long interval to prevent auto-discovery
+	cfg.ProjectProperties["search_timeout"] = 100 * time.Millisecond
+	cfg.ProjectProperties["search_max_instances"] = 5
+	cfg.ProjectProperties["search_predefined_servers"] = []string{}
 	return cfg
 }
 
-func testConfigWithOverrides(overrides func(*config.SearchConfig)) *ConfigBuilder.Config {
-	cfg := &ConfigBuilder.Config{
-		ProjectProperties: make(ConfigBuilder.ProjectProperties),
-	}
-	searchCfg := config.SearchConfig{
-		ServiceName:  "testservice",
-		Domains:      []string{".test"},
-		Port:         42069,
-		ScanInterval: time.Hour,
-		Timeout:      100 * time.Millisecond,
-		MaxInstances: 5,
-	}
+func testConfigWithOverrides(overrides func(cfg *ConfigBuilder.Config)) *ConfigBuilder.Config {
+	cfg := defaultTestConfig()
 	if overrides != nil {
-		overrides(&searchCfg)
+		overrides(cfg)
 	}
-	cfg.ProjectProperties.Set("project", config.ProjectConfig{
-		Service: config.ServiceConfig{
-			Name:    "testservice",
-			Version: "1.0.0",
-		},
-		Search: searchCfg,
-	})
 	return cfg
 }
 
@@ -72,9 +49,9 @@ func TestNewSystem(t *testing.T) {
 	if sys.Registry != reg {
 		t.Error("Registry not set correctly")
 	}
-	searchCfg := sys.getSearchConfig()
-	if searchCfg.ServiceName != "testservice" {
-		t.Errorf("ServiceName = %q, want %q", searchCfg.ServiceName, "testservice")
+	serviceName := sys.getServiceName()
+	if serviceName != "testservice" {
+		t.Errorf("ServiceName = %q, want %q", serviceName, "testservice")
 	}
 	if sys.stopChan == nil {
 		t.Error("stopChan should be initialized")
@@ -94,8 +71,8 @@ func TestSystem_SetSelfAddress(t *testing.T) {
 }
 
 func TestSystem_StartStop(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.ScanInterval = 10 * time.Millisecond
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_interval"] = 10 * time.Millisecond
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -124,8 +101,8 @@ func TestSystem_StartStop(t *testing.T) {
 }
 
 func TestSystem_StartStop_ContextCancel(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.ScanInterval = time.Hour
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_interval"] = time.Hour
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -156,9 +133,9 @@ func TestSystem_StartStop_ContextCancel(t *testing.T) {
 }
 
 func TestSystem_FindOthers_NoHosts(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.Domains = []string{".nonexistent.invalid"}
-		sc.MaxInstances = 2
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 2
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -175,8 +152,8 @@ func TestSystem_FindOthers_NoHosts(t *testing.T) {
 }
 
 func TestSystem_TryBroadcast_Timeout(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.Timeout = 10 * time.Millisecond
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_timeout"] = 10 * time.Millisecond
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -317,8 +294,8 @@ func TestSystem_HealthCheck_Success(t *testing.T) {
 }
 
 func TestSystem_HealthCheck_Failure(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_timeout"] = 50 * time.Millisecond
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -348,8 +325,8 @@ func TestSystem_HealthCheck_EmptyRegistry(t *testing.T) {
 }
 
 func TestSystem_HealthCheck_Concurrent(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_timeout"] = 50 * time.Millisecond
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -396,8 +373,8 @@ func TestSystem_ProbeAddress_Success(t *testing.T) {
 }
 
 func TestSystem_ProbeAddress_ConnectionFailure(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.Timeout = 50 * time.Millisecond
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_timeout"] = 50 * time.Millisecond
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -466,11 +443,11 @@ func TestSystem_ProbeService_SkipSelf(t *testing.T) {
 
 type mockCacheServer struct {
 	pb.UnimplementedCacheServiceServer
-	name         string
-	address      string
-	version      string
-	lastRequest  *pb.BroadcastRequest
-	requestMu    sync.Mutex
+	name        string
+	address     string
+	version     string
+	lastRequest *pb.BroadcastRequest
+	requestMu   sync.Mutex
 }
 
 func (m *mockCacheServer) Broadcast(ctx context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
@@ -546,10 +523,10 @@ func itoa(i int) string {
 }
 
 func TestSystem_DiscoveryLoop_Ticker(t *testing.T) {
-	cfg := testConfigWithOverrides(func(sc *config.SearchConfig) {
-		sc.ScanInterval = 20 * time.Millisecond
-		sc.Domains = []string{".nonexistent.invalid"}
-		sc.MaxInstances = 0
+	cfg := testConfigWithOverrides(func(c *ConfigBuilder.Config) {
+		c.ProjectProperties["search_scan_interval"] = 20 * time.Millisecond
+		c.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+		c.ProjectProperties["search_max_instances"] = 0
 	})
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -611,25 +588,18 @@ func TestSystem_FindOthers_PredefinedServers(t *testing.T) {
 	cfg := &ConfigBuilder.Config{
 		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	cfg.ProjectProperties.Set("project", config.ProjectConfig{
-		Service: config.ServiceConfig{
-			Name:    "testservice",
-			Version: "1.0.0",
-		},
-		Search: config.SearchConfig{
-			ServiceName:       "testservice",
-			Domains:           []string{".nonexistent.invalid"}, // No DNS discovery
-			Port:              42069,
-			ScanInterval:      time.Hour,
-			Timeout:           time.Second,
-			MaxInstances:      0,
-			MaxPortRetries:    1,
-			PredefinedServers: []string{
-				"127.0.0.1:" + itoa(port1),
-				"127.0.0.1:" + itoa(port2),
-			},
-		},
-	})
+	cfg.ProjectProperties["service_name"] = "testservice"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "testservice"
+	cfg.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"} // No DNS discovery
+	cfg.ProjectProperties["search_port"] = 42069
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = time.Second
+	cfg.ProjectProperties["search_max_instances"] = 0
+	cfg.ProjectProperties["search_predefined_servers"] = []string{
+		"127.0.0.1:" + itoa(port1),
+		"127.0.0.1:" + itoa(port2),
+	}
 
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)
@@ -659,22 +629,15 @@ func TestSystem_FindOthers_PredefinedServers_SkipsSelf(t *testing.T) {
 	cfg := &ConfigBuilder.Config{
 		ProjectProperties: make(ConfigBuilder.ProjectProperties),
 	}
-	cfg.ProjectProperties.Set("project", config.ProjectConfig{
-		Service: config.ServiceConfig{
-			Name:    "testservice",
-			Version: "1.0.0",
-		},
-		Search: config.SearchConfig{
-			ServiceName:       "testservice",
-			Domains:           []string{".nonexistent.invalid"},
-			Port:              42069,
-			ScanInterval:      time.Hour,
-			Timeout:           time.Second,
-			MaxInstances:      0,
-			MaxPortRetries:    1,
-			PredefinedServers: []string{selfAddress}, // Self is in predefined
-		},
-	})
+	cfg.ProjectProperties["service_name"] = "testservice"
+	cfg.ProjectProperties["service_version"] = "1.0.0"
+	cfg.ProjectProperties["search_service_name"] = "testservice"
+	cfg.ProjectProperties["search_domains"] = []string{".nonexistent.invalid"}
+	cfg.ProjectProperties["search_port"] = 42069
+	cfg.ProjectProperties["search_scan_interval"] = time.Hour
+	cfg.ProjectProperties["search_timeout"] = time.Second
+	cfg.ProjectProperties["search_max_instances"] = 0
+	cfg.ProjectProperties["search_predefined_servers"] = []string{selfAddress} // Self is in predefined
 
 	reg := registry.New()
 	sys := NewSystem(cfg, reg)

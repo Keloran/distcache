@@ -1,17 +1,77 @@
 package main
 
 import (
+	"time"
+
 	"github.com/bugfixes/go-bugfixes/logs"
+	"github.com/caarlos0/env/v8"
 	"github.com/keloran/distcache/internal"
-	"github.com/keloran/distcache/internal/config"
 	ConfigBuilder "github.com/keloran/go-config"
 )
 
+var (
+	BuildVersion = "0.0.1"
+	BuildHash    = "unknown"
+	ServiceName  = "distcache"
+)
+
+type ProjectConfig struct{}
+
+func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
+	type ServiceConfig struct {
+		Name    string `env:"SERVICE_NAME" envDefault:"distcache"`
+		Version string `env:"SERVICE_VERSION" envDefault:"1.0.0"`
+	}
+
+	type SearchConfig struct {
+		ServiceName       string        `env:"SERVICE_NAME" envDefault:"distcache"`
+		Domains           []string      `env:"SERVICE_DOMAINS" envSeparator:"," envDefault:".internal"`
+		Port              int           `env:"SERVICE_PORT" envDefault:"42069"`
+		ScanInterval      time.Duration `env:"SERVICE_SCAN_INTERVAL" envDefault:"30s"`
+		Timeout           time.Duration `env:"SERVICE_TIMEOUT" envDefault:"5s"`
+		MaxInstances      int           `env:"SERVICE_MAX_INSTANCES" envDefault:"100"`
+		MaxPortRetries    int           `env:"PORT_RETRIES" envDefault:"10"`
+		PredefinedServers []string      `env:"PREDEFINED_SERVERS" envSeparator:","`
+	}
+
+	var service ServiceConfig
+	if err := env.Parse(&service); err != nil {
+		return logs.Errorf("failed to parse service config: %v", err)
+	}
+
+	var search SearchConfig
+	if err := env.Parse(&search); err != nil {
+		return logs.Errorf("failed to parse search config: %v", err)
+	}
+
+	if cfg.ProjectProperties == nil {
+		cfg.ProjectProperties = make(ConfigBuilder.ProjectProperties)
+	}
+
+	// Service properties
+	cfg.ProjectProperties["service_name"] = service.Name
+	cfg.ProjectProperties["service_version"] = service.Version
+
+	// Search properties
+	cfg.ProjectProperties["search_service_name"] = search.ServiceName
+	cfg.ProjectProperties["search_domains"] = search.Domains
+	cfg.ProjectProperties["search_port"] = search.Port
+	cfg.ProjectProperties["search_scan_interval"] = search.ScanInterval
+	cfg.ProjectProperties["search_timeout"] = search.Timeout
+	cfg.ProjectProperties["search_max_instances"] = search.MaxInstances
+	cfg.ProjectProperties["search_max_port_retries"] = search.MaxPortRetries
+	cfg.ProjectProperties["search_predefined_servers"] = search.PredefinedServers
+
+	return nil
+}
+
 func main() {
+	logs.Logf("Starting %s version %s (build %s)", ServiceName, BuildVersion, BuildHash)
+
 	c := ConfigBuilder.NewConfigNoVault()
 	if err := c.Build(
 		ConfigBuilder.Local,
-		ConfigBuilder.WithProjectConfigurator(config.Configurator{}),
+		ConfigBuilder.WithProjectConfigurator(ProjectConfig{}),
 	); err != nil {
 		logs.Fatalf("failed to build config: %v", err)
 	}
