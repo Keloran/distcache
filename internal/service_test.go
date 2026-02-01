@@ -1089,7 +1089,7 @@ func TestService_New_DefaultTTL(t *testing.T) {
 	if svc.Cache == nil {
 		t.Fatal("Cache should be initialized")
 	}
-	if svc.Cache.GetTTL() != 10*time.Second {
-		t.Errorf("Default TTL = %v, want 10s", svc.Cache.GetTTL())
+	if svc.Cache.GetTTL() != 5*time.Minute {
+		t.Errorf("Default TTL = %v, want 5m", svc.Cache.GetTTL())
 	}
 }

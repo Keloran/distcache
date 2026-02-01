@@ -38,7 +38,7 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	}
 
 	type CacheConfig struct {
-		TTL time.Duration `env:"CACHE_TTL" envDefault:"10s"`
+		TTL time.Duration `env:"CACHE_TTL" envDefault:"5m"`
 	}
 
 	var service ServiceConfig

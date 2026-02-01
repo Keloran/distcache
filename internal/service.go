@@ -37,7 +37,7 @@ func New(cfg *ConfigBuilder.Config) *Service {
 	searchSystem := search.NewSystem(cfg, reg)
 
 	// Get cache TTL from config
-	ttl := 10 * time.Second
+	ttl := 5 * time.Minute
 	if v, ok := cfg.ProjectProperties["cache_ttl"].(time.Duration); ok {
 		ttl = v
 	}

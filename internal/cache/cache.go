@@ -190,6 +190,16 @@ func (c *Cache) GetTTL() time.Duration {
 
 // GetAllEntries returns all non-expired entries in the cache, keyed by their cache key
 func (c *Cache) GetAllEntries() map[string][]*Data {
+	return c.getAllEntries(true)
+}
+
+// GetAllEntriesForSync returns all entries in the cache regardless of TTL
+// Used for syncing to peers - the receiving peer will apply its own TTL
+func (c *Cache) GetAllEntriesForSync() map[string][]*Data {
+	return c.getAllEntries(false)
+}
+
+func (c *Cache) getAllEntries(filterExpired bool) map[string][]*Data {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -199,7 +209,7 @@ func (c *Cache) GetAllEntries() map[string][]*Data {
 	for key, entries := range c.entries {
 		validEntries := make([]*Data, 0, len(entries))
 		for _, entry := range entries {
-			if c.ttl == 0 || now.Sub(entry.Timestamp) < c.ttl {
+			if !filterExpired || c.ttl == 0 || now.Sub(entry.Timestamp) < c.ttl {
 				validEntries = append(validEntries, entry)
 			}
 		}
