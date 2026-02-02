@@ -62,29 +62,25 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	}
 
 	// Service properties
-	cfg.ProjectProperties["service_name"] = service.Name
-	cfg.ProjectProperties["service_version"] = service.Version
+	cfg.ProjectProperties.Set("service.name", service.Name)
+	cfg.ProjectProperties.Set("service.version", service.Version)
 
 	// Search properties
-	cfg.ProjectProperties["search_service_name"] = search.ServiceName
-	cfg.ProjectProperties["search_domains"] = search.Domains
-	cfg.ProjectProperties["search_port"] = search.Port
-	cfg.ProjectProperties["search_scan_interval"] = search.ScanInterval
-	cfg.ProjectProperties["search_timeout"] = search.Timeout
-	cfg.ProjectProperties["search_max_instances"] = search.MaxInstances
-	cfg.ProjectProperties["search_max_port_retries"] = search.MaxPortRetries
-	cfg.ProjectProperties["search_predefined_servers"] = search.PredefinedServers
-	cfg.ProjectProperties["search_ip_ranges"] = search.IPRanges
-	cfg.ProjectProperties["search_scan_own_range"] = search.ScanOwnRange
-	cfg.ProjectProperties["search_active_discovery_duration"] = search.ActiveDiscoveryDuration
+	cfg.ProjectProperties.Set("search_service_name", search.ServiceName)
+	cfg.ProjectProperties.Set("search_domains", search.Domains)
+	cfg.ProjectProperties.Set("search_port", search.Port)
+	cfg.ProjectProperties.Set("search_scan_interval", search.ScanInterval)
+	cfg.ProjectProperties.Set("search_timeout", search.Timeout)
+	cfg.ProjectProperties.Set("search_max_instances", search.MaxInstances)
+	cfg.ProjectProperties.Set("search_max_port_retries", search.MaxPortRetries)
+	cfg.ProjectProperties.Set("search_predefined_servers", search.PredefinedServers)
+	cfg.ProjectProperties.Set("search_ip_ranges", search.IPRanges)
+	cfg.ProjectProperties.Set("search_scan_own_range", search.ScanOwnRange)
+	cfg.ProjectProperties.Set("cache_ttl", cacheConf.TTL)
+	cfg.ProjectProperties.Set("search_active_discovery_duration", search.ActiveDiscoveryDuration)
 	if search.PortRangeEnd > 0 {
-		cfg.ProjectProperties["search_port_range_end"] = search.PortRangeEnd
+		cfg.ProjectProperties.Set("search_port_range_end", search.PortRangeEnd)
 	}
-	// In development mode, allow discovering self (for testing multiple instances on same machine)
-	cfg.ProjectProperties["search_allow_self"] = cfg.Local.Development
-
-	// Cache properties
-	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL
 
 	return nil
 }

@@ -117,16 +117,9 @@ func (s *System) getPortRangeEnd() int {
 	return s.getPort() + 10
 }
 
-func (s *System) getAllowSelf() bool {
-	if v, ok := s.Config.ProjectProperties["search_allow_self"].(bool); ok {
-		return v
-	}
-	return false
-}
-
 // shouldSkipAddress returns true if we should skip this address (it's ourselves)
 func (s *System) shouldSkipAddress(address string) bool {
-	if s.getAllowSelf() {
+	if s.Config.Local.Development {
 		return false // In dev mode with allow_self, don't skip anything
 	}
 	return address == s.selfAddress
