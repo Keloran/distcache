@@ -25,7 +25,7 @@ type Data struct {
 
 type Cache struct {
 	mu          sync.RWMutex
-	entries     map[string][]*Data
+	entries     map[string]map[int64]*Data // key -> timestamp -> data
 	ttl         time.Duration
 	maxSize     int64 // 0 means unlimited
 	currentSize int64
@@ -40,7 +40,7 @@ func NewCache(ttl time.Duration) *Cache {
 // maxSize of 0 means unlimited
 func NewCacheWithMaxSize(ttl time.Duration, maxSize int64) *Cache {
 	return &Cache{
-		entries: make(map[string][]*Data),
+		entries: make(map[string]map[int64]*Data),
 		ttl:     ttl,
 		maxSize: maxSize,
 	}
@@ -127,8 +127,8 @@ func (s *System) KeyExists() bool {
 }
 
 // CreateEntry adds a new entry and cleans up expired entries for this key
-// Returns error if the entry is larger than the max cache size
-func (s *System) CreateEntry(value *structpb.Value) error {
+// Returns (true, nil) if stored, (false, nil) if duplicate, or (false, error) on error
+func (s *System) CreateEntry(value *structpb.Value) (bool, error) {
 	return s.CreateEntryWithTimestamp(value, time.Now())
 }
 
@@ -136,27 +136,33 @@ func (s *System) CreateEntry(value *structpb.Value) error {
 var ErrEntryTooLarge = fmt.Errorf("entry exceeds maximum cache size")
 
 // CreateEntryWithTimestamp adds a new entry with a specific timestamp (used for replication)
-// Returns error if the entry is larger than the max cache size
-func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.Time) error {
+// If an entry with the same key+timestamp exists, it's a no-op (idempotent for replication)
+// Returns (true, nil) if a new entry was stored, (false, nil) if it was a duplicate, or (false, error) on error
+func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.Time) (bool, error) {
 	entrySize := estimateSize(value)
+	tsNano := timestamp.UnixNano()
 
 	// Reject entries larger than max cache size
 	if s.Cache.maxSize > 0 && entrySize > s.Cache.maxSize {
 		logs.Warnf("rejecting entry for key %q: size %d exceeds max cache size %d", s.Key, entrySize, s.Cache.maxSize)
-		return ErrEntryTooLarge
-	}
-
-	cacheData := &Data{
-		Timestamp: timestamp,
-		Value:     value,
-		size:      entrySize,
+		return false, ErrEntryTooLarge
 	}
 
 	s.Cache.mu.Lock()
 	defer s.Cache.mu.Unlock()
 
+	// Initialize inner map if needed
+	if s.Cache.entries[s.Key] == nil {
+		s.Cache.entries[s.Key] = make(map[int64]*Data)
+	}
+
+	// If this exact timestamp already exists, it's a no-op (idempotent)
+	if _, exists := s.Cache.entries[s.Key][tsNano]; exists {
+		return false, nil
+	}
+
 	// Clean expired entries for this key before adding new one
-	if s.Cache.ttl > 0 && s.Cache.entries[s.Key] != nil {
+	if s.Cache.ttl > 0 {
 		s.cleanExpiredEntriesLocked()
 	}
 
@@ -165,9 +171,20 @@ func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.
 		s.Cache.evictIfNeededLocked(entrySize)
 	}
 
-	s.Cache.entries[s.Key] = append(s.Cache.entries[s.Key], cacheData)
+	// Re-initialize inner map if it was deleted by cleanup/eviction
+	if s.Cache.entries[s.Key] == nil {
+		s.Cache.entries[s.Key] = make(map[int64]*Data)
+	}
+
+	cacheData := &Data{
+		Timestamp: timestamp,
+		Value:     value,
+		size:      entrySize,
+	}
+
+	s.Cache.entries[s.Key][tsNano] = cacheData
 	s.Cache.currentSize += entrySize
-	return nil
+	return true, nil
 }
 
 // cleanExpiredEntriesLocked removes expired entries (must be called with lock held)
@@ -178,20 +195,16 @@ func (s *System) cleanExpiredEntriesLocked() {
 		return
 	}
 
-	// Filter out expired entries
-	validEntries := make([]*Data, 0, len(entries))
-	for _, entry := range entries {
-		if now.Sub(entry.Timestamp) < s.Cache.ttl {
-			validEntries = append(validEntries, entry)
-		} else {
+	// Remove expired entries
+	for tsNano, entry := range entries {
+		if now.Sub(entry.Timestamp) >= s.Cache.ttl {
 			s.Cache.currentSize -= entry.size
+			delete(entries, tsNano)
 		}
 	}
 
-	if len(validEntries) == 0 {
+	if len(entries) == 0 {
 		delete(s.Cache.entries, s.Key)
-	} else {
-		s.Cache.entries[s.Key] = validEntries
 	}
 }
 
@@ -222,8 +235,10 @@ func (s *System) RemoveKey() {
 	defer s.Cache.mu.Unlock()
 
 	// Subtract size of removed entries
-	for _, entry := range s.Cache.entries[s.Key] {
-		s.Cache.currentSize -= entry.size
+	if entries := s.Cache.entries[s.Key]; entries != nil {
+		for _, entry := range entries {
+			s.Cache.currentSize -= entry.size
+		}
 	}
 	delete(s.Cache.entries, s.Key)
 }
@@ -238,19 +253,15 @@ func (s *System) RemoveTimedEntries(filterBefore time.Duration) {
 	}
 
 	now := time.Now()
-	validEntries := make([]*Data, 0, len(entries))
-	for _, entry := range entries {
-		if now.Sub(entry.Timestamp) < filterBefore {
-			validEntries = append(validEntries, entry)
-		} else {
+	for tsNano, entry := range entries {
+		if now.Sub(entry.Timestamp) >= filterBefore {
 			s.Cache.currentSize -= entry.size
+			delete(entries, tsNano)
 		}
 	}
 
-	if len(validEntries) == 0 {
+	if len(entries) == 0 {
 		delete(s.Cache.entries, s.Key)
-	} else {
-		s.Cache.entries[s.Key] = validEntries
 	}
 }
 
@@ -265,19 +276,15 @@ func (c *Cache) CleanAllExpired() {
 
 	now := time.Now()
 	for key, entries := range c.entries {
-		validEntries := make([]*Data, 0, len(entries))
-		for _, entry := range entries {
-			if now.Sub(entry.Timestamp) < c.ttl {
-				validEntries = append(validEntries, entry)
-			} else {
+		for tsNano, entry := range entries {
+			if now.Sub(entry.Timestamp) >= c.ttl {
 				c.currentSize -= entry.size
+				delete(entries, tsNano)
 			}
 		}
 
-		if len(validEntries) == 0 {
+		if len(entries) == 0 {
 			delete(c.entries, key)
-		} else {
-			c.entries[key] = validEntries
 		}
 	}
 }
@@ -321,9 +328,11 @@ func (c *Cache) getAllEntries(filterExpired bool) map[string][]*Data {
 }
 
 // ImportEntry adds an entry directly (used for sync, skips TTL cleanup)
+// If an entry with the same key+timestamp exists, it's a no-op (idempotent)
 // Returns error if the entry is larger than the max cache size
 func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Time) error {
 	entrySize := estimateSize(value)
+	tsNano := timestamp.UnixNano()
 
 	// Reject entries larger than max cache size
 	if c.maxSize > 0 && entrySize > c.maxSize {
@@ -333,6 +342,16 @@ func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Ti
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Initialize inner map if needed
+	if c.entries[key] == nil {
+		c.entries[key] = make(map[int64]*Data)
+	}
+
+	// If this exact timestamp already exists, it's a no-op (idempotent)
+	if _, exists := c.entries[key][tsNano]; exists {
+		return nil
+	}
 
 	// Evict old entries if we would exceed max size
 	if c.maxSize > 0 {
@@ -344,7 +363,7 @@ func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Ti
 		Value:     value,
 		size:      entrySize,
 	}
-	c.entries[key] = append(c.entries[key], data)
+	c.entries[key][tsNano] = data
 	c.currentSize += entrySize
 	return nil
 }
@@ -360,15 +379,15 @@ func (c *Cache) evictIfNeededLocked(newEntrySize int64) {
 	for c.currentSize > targetSize && len(c.entries) > 0 {
 		// Find the oldest entry across all keys
 		var oldestKey string
-		var oldestIdx int
+		var oldestTsNano int64
 		var oldestTime time.Time
 		first := true
 
 		for key, entries := range c.entries {
-			for idx, entry := range entries {
+			for tsNano, entry := range entries {
 				if first || entry.Timestamp.Before(oldestTime) {
 					oldestKey = key
-					oldestIdx = idx
+					oldestTsNano = tsNano
 					oldestTime = entry.Timestamp
 					first = false
 				}
@@ -382,13 +401,12 @@ func (c *Cache) evictIfNeededLocked(newEntrySize int64) {
 
 		// Remove the oldest entry
 		entries := c.entries[oldestKey]
-		evicted := entries[oldestIdx]
+		evicted := entries[oldestTsNano]
 		c.currentSize -= evicted.size
+		delete(entries, oldestTsNano)
 
-		if len(entries) == 1 {
+		if len(entries) == 0 {
 			delete(c.entries, oldestKey)
-		} else {
-			c.entries[oldestKey] = append(entries[:oldestIdx], entries[oldestIdx+1:]...)
 		}
 
 		logs.Infof("evicted cache entry for key %q (age: %v) to make room, current size: %d/%d bytes",

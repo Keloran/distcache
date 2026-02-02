@@ -245,6 +245,7 @@ type SetCacheRequest struct {
 	Value             *structpb.Value        `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	TimestampUnixNano int64                  `protobuf:"varint,3,opt,name=timestamp_unix_nano,json=timestampUnixNano,proto3" json:"timestamp_unix_nano,omitempty"`
 	FromReplication   bool                   `protobuf:"varint,4,opt,name=from_replication,json=fromReplication,proto3" json:"from_replication,omitempty"` // true if this is a replication from another node (don't re-replicate)
+	ReplicatedTo      []string               `protobuf:"bytes,5,rep,name=replicated_to,json=replicatedTo,proto3" json:"replicated_to,omitempty"`           // addresses that have already received this replication
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -305,6 +306,13 @@ func (x *SetCacheRequest) GetFromReplication() bool {
 		return x.FromReplication
 	}
 	return false
+}
+
+func (x *SetCacheRequest) GetReplicatedTo() []string {
+	if x != nil {
+		return x.ReplicatedTo
+	}
+	return nil
 }
 
 type SetCacheResponse struct {
@@ -674,12 +682,13 @@ const file_proto_cache_cache_proto_rawDesc = "" +
 	"\ahealthy\x18\x01 \x01(\bR\ahealthy\x12\x1d\n" +
 	"\n" +
 	"peer_count\x18\x02 \x01(\x05R\tpeerCount\x12,\n" +
-	"\x12healthy_peer_count\x18\x03 \x01(\x05R\x10healthyPeerCount\"\xac\x01\n" +
+	"\x12healthy_peer_count\x18\x03 \x01(\x05R\x10healthyPeerCount\"\xd1\x01\n" +
 	"\x0fSetCacheRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12,\n" +
 	"\x05value\x18\x02 \x01(\v2\x16.google.protobuf.ValueR\x05value\x12.\n" +
 	"\x13timestamp_unix_nano\x18\x03 \x01(\x03R\x11timestampUnixNano\x12)\n" +
-	"\x10from_replication\x18\x04 \x01(\bR\x0ffromReplication\"B\n" +
+	"\x10from_replication\x18\x04 \x01(\bR\x0ffromReplication\x12#\n" +
+	"\rreplicated_to\x18\x05 \x03(\tR\freplicatedTo\"B\n" +
 	"\x10SetCacheResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"#\n" +

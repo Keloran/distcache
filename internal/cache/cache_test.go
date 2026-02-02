@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -8,6 +9,21 @@ import (
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// mapToSlice converts a map[int64]*Data to a slice sorted by timestamp
+func mapToSlice(m map[int64]*Data) []*Data {
+	if m == nil {
+		return nil
+	}
+	result := make([]*Data, 0, len(m))
+	for _, v := range m {
+		result = append(result, v)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Timestamp.Before(result[j].Timestamp)
+	})
+	return result
+}
 
 func newTestCache() *Cache {
 	return NewCache(0) // No TTL for basic tests
@@ -124,7 +140,7 @@ func TestSystem_CreateEntry_String(t *testing.T) {
 		t.Fatal("key should exist after CreateEntry")
 	}
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -145,7 +161,7 @@ func TestSystem_CreateEntry_Int(t *testing.T) {
 
 	sys.CreateEntry(intValue(12345))
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -162,7 +178,7 @@ func TestSystem_CreateEntry_Float(t *testing.T) {
 
 	sys.CreateEntry(floatValue(3.14159))
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -179,7 +195,7 @@ func TestSystem_CreateEntry_Bool(t *testing.T) {
 
 	sys.CreateEntry(boolValue(true))
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -197,7 +213,7 @@ func TestSystem_CreateEntry_Bytes(t *testing.T) {
 	jsonData := []byte(`{"name":"test","value":123}`)
 	sys.CreateEntry(bytesValue(jsonData))
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -212,11 +228,15 @@ func TestSystem_CreateEntry_Multiple(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry(stringValue("first"))
-	sys.CreateEntry(stringValue("second"))
-	sys.CreateEntry(stringValue("third"))
+	// Use explicit timestamps to ensure ordering and avoid same-timestamp deduplication
+	t1 := time.Now()
+	t2 := t1.Add(time.Millisecond)
+	t3 := t2.Add(time.Millisecond)
+	sys.CreateEntryWithTimestamp(stringValue("first"), t1)
+	sys.CreateEntryWithTimestamp(stringValue("second"), t2)
+	sys.CreateEntryWithTimestamp(stringValue("third"), t3)
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(entries))
 	}
@@ -240,7 +260,7 @@ func TestSystem_CreateEntryWithTimestamp(t *testing.T) {
 	customTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	sys.CreateEntryWithTimestamp(stringValue("data"), customTime)
 
-	entries := cache.entries["test-key"]
+	entries := mapToSlice(cache.entries["test-key"])
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
@@ -305,19 +325,24 @@ func TestSystem_GetEntries(t *testing.T) {
 	cache := newTestCache()
 	sys := New(cfg, "test-key", cache)
 
-	sys.CreateEntry(stringValue("first"))
-	sys.CreateEntry(stringValue("second"))
+	// Use explicit timestamps to ensure different entries
+	t1 := time.Now()
+	t2 := t1.Add(time.Millisecond)
+	sys.CreateEntryWithTimestamp(stringValue("first"), t1)
+	sys.CreateEntryWithTimestamp(stringValue("second"), t2)
 
 	entries := sys.GetEntries()
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetStringValue() != "first" {
-		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetStringValue(), "first")
+	// Check that both values exist (order not guaranteed)
+	values := make(map[string]bool)
+	for _, e := range entries {
+		values[e.Value.GetStringValue()] = true
 	}
-	if entries[1].Value.GetStringValue() != "second" {
-		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetStringValue(), "second")
+	if !values["first"] || !values["second"] {
+		t.Errorf("expected first and second, got %v", values)
 	}
 }
 
@@ -482,12 +507,15 @@ func TestSystem_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	iterations := 100
 
-	// Concurrent creates
+	// Concurrent creates with explicit unique timestamps
+	baseTime := time.Now()
 	for i := 0; i < iterations; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			sys.CreateEntry(intValue(int64(idx)))
+			// Use unique timestamp for each entry to avoid deduplication
+			ts := baseTime.Add(time.Duration(idx) * time.Microsecond)
+			sys.CreateEntryWithTimestamp(intValue(int64(idx)), ts)
 		}(i)
 	}
 
@@ -542,9 +570,13 @@ func TestSystem_MultipleSystemsSameCache(t *testing.T) {
 	sys2 := New(cfg, "key2", cache)
 	sys3 := New(cfg, "key1", cache) // Same key as sys1
 
-	sys1.CreateEntry(stringValue("from-sys1"))
-	sys2.CreateEntry(stringValue("from-sys2"))
-	sys3.CreateEntry(stringValue("from-sys3")) // Should append to same key as sys1
+	// Use explicit unique timestamps to ensure distinct entries
+	t1 := time.Now()
+	t2 := t1.Add(time.Millisecond)
+	t3 := t2.Add(time.Millisecond)
+	sys1.CreateEntryWithTimestamp(stringValue("from-sys1"), t1)
+	sys2.CreateEntryWithTimestamp(stringValue("from-sys2"), t2)
+	sys3.CreateEntryWithTimestamp(stringValue("from-sys3"), t3) // Should add to same key as sys1
 
 	// key1 should have 2 entries
 	if len(cache.entries["key1"]) != 2 {

@@ -50,6 +50,7 @@ message SetCacheRequest {
   google.protobuf.Value value = 2;
   int64 timestamp_unix_nano = 3;
   bool from_replication = 4; // true if this is a replication from another node (don't re-replicate)
+  repeated string replicated_to = 5; // addresses that have already received this replication
 }
 
 message SetCacheResponse {

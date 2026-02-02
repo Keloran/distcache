@@ -240,7 +240,7 @@ func (s *Service) HealthCheck(_ context.Context, _ *pb.HealthCheckRequest) (*pb.
 // When a client sets a cache entry, we store it locally and replicate to peers
 func (s *Service) SetCache(ctx context.Context, req *pb.SetCacheRequest) (*pb.SetCacheResponse, error) {
 	// Log what we received
-	logs.Infof("SetCache received: key=%q, value=%v, valueNil=%v", req.Key, req.Value, req.Value == nil)
+	logs.Infof("SetCache received: key=%q, value=%v, valueNil=%v, fromReplication=%v", req.Key, req.Value, req.Value == nil, req.FromReplication)
 
 	// Convert timestamp
 	timestamp := time.Unix(0, req.TimestampUnixNano)
@@ -248,17 +248,18 @@ func (s *Service) SetCache(ctx context.Context, req *pb.SetCacheRequest) (*pb.Se
 		timestamp = time.Now()
 	}
 
-	// Store locally
+	// Store locally (idempotent: same key+timestamp = no-op)
 	cacheSystem := cache.New(s.Config, req.Key, s.Cache)
-	if err := cacheSystem.CreateEntryWithTimestamp(req.Value, timestamp); err != nil {
+	isNew, err := cacheSystem.CreateEntryWithTimestamp(req.Value, timestamp)
+	if err != nil {
 		logs.Warnf("failed to cache key %q: %v", req.Key, err)
 		return &pb.SetCacheResponse{
 			Success: false,
 		}, err
 	}
 
-	// If this is not from replication, replicate to all peers
-	if !req.FromReplication {
+	// Only replicate if we actually stored new data (prevents infinite loops)
+	if isNew {
 		s.replicateToPeers(ctx, req.Key, req.Value, timestamp)
 	}
 
@@ -294,6 +295,7 @@ func (s *Service) GetCache(_ context.Context, req *pb.GetCacheRequest) (*pb.GetC
 }
 
 // replicateToPeers sends the cache entry to all healthy peers
+// The cache is idempotent (same key+timestamp = no-op), so we can safely broadcast to everyone
 func (s *Service) replicateToPeers(ctx context.Context, key string, value *structpb.Value, timestamp time.Time) {
 	peers := s.Registry.GetHealthy()
 	if len(peers) == 0 {
@@ -345,7 +347,7 @@ func (s *Service) replicateToPeer(ctx context.Context, addr, key string, value *
 		Key:               key,
 		Value:             value,
 		TimestampUnixNano: timestamp.UnixNano(),
-		FromReplication:   true, // Mark as replication to prevent re-replication
+		FromReplication:   true,
 	})
 	if err != nil {
 		return fmt.Errorf("SetCache failed: %w", err)
