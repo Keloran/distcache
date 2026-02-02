@@ -207,6 +207,9 @@ func (s *Service) HealthCheck(_ context.Context, _ *pb.HealthCheckRequest) (*pb.
 // SetCache implements the gRPC SetCache RPC
 // When a client sets a cache entry, we store it locally and replicate to peers
 func (s *Service) SetCache(ctx context.Context, req *pb.SetCacheRequest) (*pb.SetCacheResponse, error) {
+	// Log what we received
+	logs.Infof("SetCache received: key=%q, value=%v, valueNil=%v", req.Key, req.Value, req.Value == nil)
+
 	// Convert timestamp
 	timestamp := time.Unix(0, req.TimestampUnixNano)
 	if req.TimestampUnixNano == 0 {
