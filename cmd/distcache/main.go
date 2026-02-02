@@ -80,6 +80,8 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	if search.PortRangeEnd > 0 {
 		cfg.ProjectProperties["search_port_range_end"] = search.PortRangeEnd
 	}
+	// In development mode, allow discovering self (for testing multiple instances on same machine)
+	cfg.ProjectProperties["search_allow_self"] = cfg.Local.Development
 
 	// Cache properties
 	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL

@@ -117,6 +117,21 @@ func (s *System) getPortRangeEnd() int {
 	return s.getPort() + 10
 }
 
+func (s *System) getAllowSelf() bool {
+	if v, ok := s.Config.ProjectProperties["search_allow_self"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+// shouldSkipAddress returns true if we should skip this address (it's ourselves)
+func (s *System) shouldSkipAddress(address string) bool {
+	if s.getAllowSelf() {
+		return false // In dev mode with allow_self, don't skip anything
+	}
+	return address == s.selfAddress
+}
+
 func (s *System) getActiveDiscoveryDuration() time.Duration {
 	if v, ok := s.Config.ProjectProperties["search_active_discovery_duration"].(time.Duration); ok {
 		return v
@@ -241,7 +256,7 @@ func (s *System) FindOthers(ctx context.Context) {
 		go func(addr string) {
 			defer wg.Done()
 			// Skip ourselves
-			if addr == s.selfAddress {
+			if s.shouldSkipAddress(addr) {
 				return
 			}
 			s.tryBroadcast(ctx, addr, addr)
@@ -285,7 +300,7 @@ func (s *System) FindOthers(ctx context.Context) {
 					defer wg.Done()
 					address := fmt.Sprintf("%s:%d", ipAddr.String(), p)
 					// Skip ourselves
-					if address == s.selfAddress {
+					if s.shouldSkipAddress(address) {
 						return
 					}
 					s.tryBroadcast(ctx, ipAddr.String(), address)
@@ -330,7 +345,7 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 		address := fmt.Sprintf("%s:%d", ip, port)
 
 		// Skip ourselves
-		if address == s.selfAddress {
+		if s.shouldSkipAddress(address) {
 			continue
 		}
 
@@ -341,10 +356,6 @@ func (s *System) probeService(ctx context.Context, hostname string) {
 func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	ctx, cancel := context.WithTimeout(ctx, s.getTimeout())
 	defer cancel()
-
-	if address == "192.168.178.79:42069" {
-		logs.Infof("broadcasting %s to %s", address, hostname)
-	}
 
 	conn, err := grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -380,7 +391,7 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 	}
 
 	// Skip ourselves
-	if peerAddr == s.selfAddress {
+	if s.shouldSkipAddress(peerAddr) {
 		return
 	}
 
