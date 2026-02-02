@@ -16,24 +16,24 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func stringValue(s string) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewStringValue(s)}
+func stringValue(s string) *structpb.Value {
+	return structpb.NewStringValue(s)
 }
 
-func intValue(i int64) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewNumberValue(float64(i))}
+func intValue(i int64) *structpb.Value {
+	return structpb.NewNumberValue(float64(i))
 }
 
-func floatValue(f float64) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewNumberValue(f)}
+func floatValue(f float64) *structpb.Value {
+	return structpb.NewNumberValue(f)
 }
 
-func boolValue(b bool) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewBoolValue(b)}
+func boolValue(b bool) *structpb.Value {
+	return structpb.NewBoolValue(b)
 }
 
-func bytesValue(b []byte) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewStringValue(string(b))}
+func bytesValue(b []byte) *structpb.Value {
+	return structpb.NewStringValue(string(b))
 }
 
 func setupTestConfig() *ConfigBuilder.Config {
@@ -600,8 +600,8 @@ func TestService_SetCache(t *testing.T) {
 	if len(getResp.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(getResp.Entries))
 	}
-	if getResp.Entries[0].Value.GetValue().GetStringValue() != "test-value" {
-		t.Errorf("value = %q, want %q", getResp.Entries[0].Value.GetValue().GetStringValue(), "test-value")
+	if getResp.Entries[0].Value.GetStringValue() != "test-value" {
+		t.Errorf("value = %q, want %q", getResp.Entries[0].Value.GetStringValue(), "test-value")
 	}
 }
 
@@ -743,28 +743,28 @@ func TestService_SetCache_DifferentTypes(t *testing.T) {
 
 	// Verify each type
 	stringResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "string-key"})
-	if stringResp.Entries[0].Value.GetValue().GetStringValue() != "hello" {
-		t.Errorf("string value = %q, want %q", stringResp.Entries[0].Value.GetValue().GetStringValue(), "hello")
+	if stringResp.Entries[0].Value.GetStringValue() != "hello" {
+		t.Errorf("string value = %q, want %q", stringResp.Entries[0].Value.GetStringValue(), "hello")
 	}
 
 	intResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "int-key"})
-	if intResp.Entries[0].Value.GetValue().GetNumberValue() != 42 {
-		t.Errorf("int value = %v, want 42", intResp.Entries[0].Value.GetValue().GetNumberValue())
+	if intResp.Entries[0].Value.GetNumberValue() != 42 {
+		t.Errorf("int value = %v, want 42", intResp.Entries[0].Value.GetNumberValue())
 	}
 
 	floatResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "float-key"})
-	if floatResp.Entries[0].Value.GetValue().GetNumberValue() != 3.14 {
-		t.Errorf("float value = %f, want 3.14", floatResp.Entries[0].Value.GetValue().GetNumberValue())
+	if floatResp.Entries[0].Value.GetNumberValue() != 3.14 {
+		t.Errorf("float value = %f, want 3.14", floatResp.Entries[0].Value.GetNumberValue())
 	}
 
 	boolResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "bool-key"})
-	if boolResp.Entries[0].Value.GetValue().GetBoolValue() != true {
-		t.Errorf("bool value = %v, want true", boolResp.Entries[0].Value.GetValue().GetBoolValue())
+	if boolResp.Entries[0].Value.GetBoolValue() != true {
+		t.Errorf("bool value = %v, want true", boolResp.Entries[0].Value.GetBoolValue())
 	}
 
 	jsonResp, _ := svc.GetCache(ctx, &pb.GetCacheRequest{Key: "json-key"})
-	if jsonResp.Entries[0].Value.GetValue().GetStringValue() != `{"name":"test"}` {
-		t.Errorf("bytes value = %q, want %q", jsonResp.Entries[0].Value.GetValue().GetStringValue(), `{"name":"test"}`)
+	if jsonResp.Entries[0].Value.GetStringValue() != `{"name":"test"}` {
+		t.Errorf("bytes value = %q, want %q", jsonResp.Entries[0].Value.GetStringValue(), `{"name":"test"}`)
 	}
 }
 
@@ -867,8 +867,8 @@ func TestCache_ImportEntry(t *testing.T) {
 	if len(resp.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(resp.Entries))
 	}
-	if resp.Entries[0].Value.GetValue().GetStringValue() != "imported-value" {
-		t.Errorf("value = %q, want %q", resp.Entries[0].Value.GetValue().GetStringValue(), "imported-value")
+	if resp.Entries[0].Value.GetStringValue() != "imported-value" {
+		t.Errorf("value = %q, want %q", resp.Entries[0].Value.GetStringValue(), "imported-value")
 	}
 }
 

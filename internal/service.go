@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type Service struct {
@@ -255,7 +256,7 @@ func (s *Service) GetCache(_ context.Context, req *pb.GetCacheRequest) (*pb.GetC
 }
 
 // replicateToPeers sends the cache entry to all healthy peers
-func (s *Service) replicateToPeers(ctx context.Context, key string, value *pb.CacheValue, timestamp time.Time) {
+func (s *Service) replicateToPeers(ctx context.Context, key string, value *structpb.Value, timestamp time.Time) {
 	peers := s.Registry.GetHealthy()
 	if len(peers) == 0 {
 		return
@@ -283,7 +284,7 @@ func (s *Service) replicateToPeers(ctx context.Context, key string, value *pb.Ca
 }
 
 // replicateToPeer sends a cache entry to a single peer
-func (s *Service) replicateToPeer(ctx context.Context, addr, key string, value *pb.CacheValue, timestamp time.Time) error {
+func (s *Service) replicateToPeer(ctx context.Context, addr, key string, value *structpb.Value, timestamp time.Time) error {
 	// Use a timeout for replication
 	timeout := 5 * time.Second
 	if v, ok := s.Config.ProjectProperties["search_timeout"].(time.Duration); ok {

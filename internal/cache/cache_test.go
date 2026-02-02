@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -22,29 +21,29 @@ func newTestConfig() *ConfigBuilder.Config {
 	return &ConfigBuilder.Config{}
 }
 
-func stringValue(s string) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewStringValue(s)}
+func stringValue(s string) *structpb.Value {
+	return structpb.NewStringValue(s)
 }
 
-func intValue(i int64) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewNumberValue(float64(i))}
+func intValue(i int64) *structpb.Value {
+	return structpb.NewNumberValue(float64(i))
 }
 
-func floatValue(f float64) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewNumberValue(f)}
+func floatValue(f float64) *structpb.Value {
+	return structpb.NewNumberValue(f)
 }
 
-func boolValue(b bool) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewBoolValue(b)}
+func boolValue(b bool) *structpb.Value {
+	return structpb.NewBoolValue(b)
 }
 
-func bytesValue(b []byte) *pb.CacheValue {
-	return &pb.CacheValue{Value: structpb.NewStringValue(string(b))}
+func bytesValue(b []byte) *structpb.Value {
+	return structpb.NewStringValue(string(b))
 }
 
-func structValue(m map[string]interface{}) *pb.CacheValue {
+func structValue(m map[string]interface{}) *structpb.Value {
 	s, _ := structpb.NewStruct(m)
-	return &pb.CacheValue{Value: structpb.NewStructValue(s)}
+	return structpb.NewStructValue(s)
 }
 
 func TestNew(t *testing.T) {
@@ -131,8 +130,8 @@ func TestSystem_CreateEntry_String(t *testing.T) {
 	}
 
 	entry := entries[0]
-	if entry.Value.GetValue().GetStringValue() != "hello world" {
-		t.Errorf("StringValue = %v, want %q", entry.Value.GetValue().GetStringValue(), "hello world")
+	if entry.Value.GetStringValue() != "hello world" {
+		t.Errorf("StringValue = %v, want %q", entry.Value.GetStringValue(), "hello world")
 	}
 	if entry.Timestamp.Before(beforeCreate) || entry.Timestamp.After(afterCreate) {
 		t.Error("Timestamp should be set to current time")
@@ -151,8 +150,8 @@ func TestSystem_CreateEntry_Int(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetNumberValue() != 12345 {
-		t.Errorf("IntValue = %v, want 12345", entries[0].Value.GetValue().GetNumberValue())
+	if entries[0].Value.GetNumberValue() != 12345 {
+		t.Errorf("IntValue = %v, want 12345", entries[0].Value.GetNumberValue())
 	}
 }
 
@@ -168,8 +167,8 @@ func TestSystem_CreateEntry_Float(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetNumberValue() != 3.14159 {
-		t.Errorf("FloatValue = %v, want 3.14159", entries[0].Value.GetValue().GetNumberValue())
+	if entries[0].Value.GetNumberValue() != 3.14159 {
+		t.Errorf("FloatValue = %v, want 3.14159", entries[0].Value.GetNumberValue())
 	}
 }
 
@@ -185,8 +184,8 @@ func TestSystem_CreateEntry_Bool(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetBoolValue() != true {
-		t.Errorf("BoolValue = %v, want true", entries[0].Value.GetValue().GetBoolValue())
+	if entries[0].Value.GetBoolValue() != true {
+		t.Errorf("BoolValue = %v, want true", entries[0].Value.GetBoolValue())
 	}
 }
 
@@ -203,8 +202,8 @@ func TestSystem_CreateEntry_Bytes(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetStringValue() != string(jsonData) {
-		t.Errorf("BytesValue = %v, want %v", entries[0].Value.GetValue().GetStringValue(), string(jsonData))
+	if entries[0].Value.GetStringValue() != string(jsonData) {
+		t.Errorf("BytesValue = %v, want %v", entries[0].Value.GetStringValue(), string(jsonData))
 	}
 }
 
@@ -222,14 +221,14 @@ func TestSystem_CreateEntry_Multiple(t *testing.T) {
 		t.Fatalf("expected 3 entries, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetStringValue() != "first" {
-		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetValue().GetStringValue(), "first")
+	if entries[0].Value.GetStringValue() != "first" {
+		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetStringValue(), "first")
 	}
-	if entries[1].Value.GetValue().GetStringValue() != "second" {
-		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetValue().GetStringValue(), "second")
+	if entries[1].Value.GetStringValue() != "second" {
+		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetStringValue(), "second")
 	}
-	if entries[2].Value.GetValue().GetStringValue() != "third" {
-		t.Errorf("entries[2] = %v, want %q", entries[2].Value.GetValue().GetStringValue(), "third")
+	if entries[2].Value.GetStringValue() != "third" {
+		t.Errorf("entries[2] = %v, want %q", entries[2].Value.GetStringValue(), "third")
 	}
 }
 
@@ -314,11 +313,11 @@ func TestSystem_GetEntries(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetStringValue() != "first" {
-		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetValue().GetStringValue(), "first")
+	if entries[0].Value.GetStringValue() != "first" {
+		t.Errorf("entries[0] = %v, want %q", entries[0].Value.GetStringValue(), "first")
 	}
-	if entries[1].Value.GetValue().GetStringValue() != "second" {
-		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetValue().GetStringValue(), "second")
+	if entries[1].Value.GetStringValue() != "second" {
+		t.Errorf("entries[1] = %v, want %q", entries[1].Value.GetStringValue(), "second")
 	}
 }
 
@@ -377,8 +376,8 @@ func TestSystem_TTL_CleansOnCreate(t *testing.T) {
 		t.Fatalf("expected 1 entry after cleanup, got %d", len(entries))
 	}
 
-	if entries[0].Value.GetValue().GetStringValue() != "new-data" {
-		t.Errorf("expected new-data, got %v", entries[0].Value.GetValue().GetStringValue())
+	if entries[0].Value.GetStringValue() != "new-data" {
+		t.Errorf("expected new-data, got %v", entries[0].Value.GetStringValue())
 	}
 }
 
@@ -572,8 +571,8 @@ func TestData_Fields(t *testing.T) {
 	if data.Timestamp.Year() != 2024 {
 		t.Errorf("Timestamp year = %d, want 2024", data.Timestamp.Year())
 	}
-	if data.Value.GetValue().GetStringValue() != "test content" {
-		t.Errorf("Value = %v, want %q", data.Value.GetValue().GetStringValue(), "test content")
+	if data.Value.GetStringValue() != "test content" {
+		t.Errorf("Value = %v, want %q", data.Value.GetStringValue(), "test content")
 	}
 }
 

@@ -5,13 +5,13 @@ import (
 	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
-	pb "github.com/keloran/distcache/proto/cache"
 	ConfigBuilder "github.com/keloran/go-config"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type Data struct {
 	Timestamp time.Time
-	Value     *pb.CacheValue
+	Value     *structpb.Value
 }
 
 type Cache struct {
@@ -61,12 +61,12 @@ func (s *System) KeyExists() bool {
 }
 
 // CreateEntry adds a new entry and cleans up expired entries for this key
-func (s *System) CreateEntry(value *pb.CacheValue) {
+func (s *System) CreateEntry(value *structpb.Value) {
 	s.CreateEntryWithTimestamp(value, time.Now())
 }
 
 // CreateEntryWithTimestamp adds a new entry with a specific timestamp (used for replication)
-func (s *System) CreateEntryWithTimestamp(value *pb.CacheValue, timestamp time.Time) {
+func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.Time) {
 	cacheData := &Data{
 		Timestamp: timestamp,
 		Value:     value,
@@ -225,7 +225,7 @@ func (c *Cache) getAllEntries(filterExpired bool) map[string][]*Data {
 }
 
 // ImportEntry adds an entry directly (used for sync, skips TTL cleanup)
-func (c *Cache) ImportEntry(key string, value *pb.CacheValue, timestamp time.Time) {
+func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
