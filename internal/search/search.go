@@ -239,6 +239,24 @@ func (s *System) FindOthers(ctx context.Context) {
 	domains := s.getDomains()
 	maxInstances := s.getMaxInstances()
 	predefinedServers := s.getPredefinedServers()
+	portStart := s.getPort()
+	portEnd := s.getPortRangeEnd()
+
+	// In development mode, scan localhost ports to find other instances on same machine
+	if s.Config.Local.Development {
+		for port := portStart; port <= portEnd; port++ {
+			wg.Add(1)
+			go func(p int) {
+				defer wg.Done()
+				address := fmt.Sprintf("127.0.0.1:%d", p)
+				// Skip ourselves
+				if s.shouldSkipAddress(address) {
+					return
+				}
+				s.tryBroadcast(ctx, "localhost", address)
+			}(port)
+		}
+	}
 
 	// Probe predefined servers first (useful for testing and known peers)
 	for _, server := range predefinedServers {
@@ -258,8 +276,6 @@ func (s *System) FindOthers(ctx context.Context) {
 
 	// Probe IP ranges (must be private ranges only)
 	ipRanges := s.getIPRanges()
-	portStart := s.getPort()
-	portEnd := s.getPortRangeEnd()
 
 	// If scan_own_range is enabled, add the server's own /24 range
 	if s.getScanOwnRange() {
