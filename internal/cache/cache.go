@@ -1,30 +1,96 @@
 package cache
 
 import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/bugfixes/go-bugfixes/logs"
 	ConfigBuilder "github.com/keloran/go-config"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// Default max cache size: 10MB
+const DefaultMaxSize int64 = 10 * 1024 * 1024
 
 type Data struct {
 	Timestamp time.Time
 	Value     *structpb.Value
+	size      int64 // cached size of this entry
 }
 
 type Cache struct {
-	mu      sync.RWMutex
-	entries map[string][]*Data
-	ttl     time.Duration
+	mu          sync.RWMutex
+	entries     map[string][]*Data
+	ttl         time.Duration
+	maxSize     int64 // 0 means unlimited
+	currentSize int64
 }
 
+// NewCache creates a new cache with the given TTL and default max size (10MB)
 func NewCache(ttl time.Duration) *Cache {
+	return NewCacheWithMaxSize(ttl, DefaultMaxSize)
+}
+
+// NewCacheWithMaxSize creates a new cache with the given TTL and max size
+// maxSize of 0 means unlimited
+func NewCacheWithMaxSize(ttl time.Duration, maxSize int64) *Cache {
 	return &Cache{
 		entries: make(map[string][]*Data),
 		ttl:     ttl,
+		maxSize: maxSize,
 	}
+}
+
+// ParseSize parses a human-readable size string (e.g., "10mb", "1g", "32t")
+// Returns the size in bytes
+func ParseSize(s string) (int64, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+
+	// Match number followed by optional unit
+	re := regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*([kmgt]?b?)?$`)
+	matches := re.FindStringSubmatch(s)
+	if matches == nil {
+		// Try parsing as plain number (bytes)
+		return strconv.ParseInt(s, 10, 64)
+	}
+
+	num, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return 0, err
+	}
+
+	unit := matches[2]
+	multiplier := int64(1)
+
+	switch {
+	case strings.HasPrefix(unit, "k"):
+		multiplier = 1024
+	case strings.HasPrefix(unit, "m"):
+		multiplier = 1024 * 1024
+	case strings.HasPrefix(unit, "g"):
+		multiplier = 1024 * 1024 * 1024
+	case strings.HasPrefix(unit, "t"):
+		multiplier = 1024 * 1024 * 1024 * 1024
+	}
+
+	return int64(num * float64(multiplier)), nil
+}
+
+// estimateSize estimates the memory size of a structpb.Value
+func estimateSize(v *structpb.Value) int64 {
+	if v == nil {
+		return 0
+	}
+	// Use protobuf's Size() for accurate serialized size, add overhead for Go struct
+	return int64(proto.Size(v)) + 64 // 64 bytes overhead for Data struct and pointers
 }
 
 type System struct {
@@ -61,18 +127,30 @@ func (s *System) KeyExists() bool {
 }
 
 // CreateEntry adds a new entry and cleans up expired entries for this key
-func (s *System) CreateEntry(value *structpb.Value) {
-	s.CreateEntryWithTimestamp(value, time.Now())
+// Returns error if the entry is larger than the max cache size
+func (s *System) CreateEntry(value *structpb.Value) error {
+	return s.CreateEntryWithTimestamp(value, time.Now())
 }
 
+// ErrEntryTooLarge is returned when an entry exceeds the maximum cache size
+var ErrEntryTooLarge = fmt.Errorf("entry exceeds maximum cache size")
+
 // CreateEntryWithTimestamp adds a new entry with a specific timestamp (used for replication)
-func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.Time) {
+// Returns error if the entry is larger than the max cache size
+func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.Time) error {
+	entrySize := estimateSize(value)
+
+	// Reject entries larger than max cache size
+	if s.Cache.maxSize > 0 && entrySize > s.Cache.maxSize {
+		logs.Warnf("rejecting entry for key %q: size %d exceeds max cache size %d", s.Key, entrySize, s.Cache.maxSize)
+		return ErrEntryTooLarge
+	}
+
 	cacheData := &Data{
 		Timestamp: timestamp,
 		Value:     value,
+		size:      entrySize,
 	}
-
-	logs.Infof("CreateEntryWithTimestamp %+v", cacheData)
 
 	s.Cache.mu.Lock()
 	defer s.Cache.mu.Unlock()
@@ -82,7 +160,14 @@ func (s *System) CreateEntryWithTimestamp(value *structpb.Value, timestamp time.
 		s.cleanExpiredEntriesLocked()
 	}
 
+	// Evict old entries if we would exceed max size
+	if s.Cache.maxSize > 0 {
+		s.Cache.evictIfNeededLocked(entrySize)
+	}
+
 	s.Cache.entries[s.Key] = append(s.Cache.entries[s.Key], cacheData)
+	s.Cache.currentSize += entrySize
+	return nil
 }
 
 // cleanExpiredEntriesLocked removes expired entries (must be called with lock held)
@@ -98,6 +183,8 @@ func (s *System) cleanExpiredEntriesLocked() {
 	for _, entry := range entries {
 		if now.Sub(entry.Timestamp) < s.Cache.ttl {
 			validEntries = append(validEntries, entry)
+		} else {
+			s.Cache.currentSize -= entry.size
 		}
 	}
 
@@ -133,6 +220,11 @@ func (s *System) GetEntries() []*Data {
 func (s *System) RemoveKey() {
 	s.Cache.mu.Lock()
 	defer s.Cache.mu.Unlock()
+
+	// Subtract size of removed entries
+	for _, entry := range s.Cache.entries[s.Key] {
+		s.Cache.currentSize -= entry.size
+	}
 	delete(s.Cache.entries, s.Key)
 }
 
@@ -150,6 +242,8 @@ func (s *System) RemoveTimedEntries(filterBefore time.Duration) {
 	for _, entry := range entries {
 		if now.Sub(entry.Timestamp) < filterBefore {
 			validEntries = append(validEntries, entry)
+		} else {
+			s.Cache.currentSize -= entry.size
 		}
 	}
 
@@ -175,6 +269,8 @@ func (c *Cache) CleanAllExpired() {
 		for _, entry := range entries {
 			if now.Sub(entry.Timestamp) < c.ttl {
 				validEntries = append(validEntries, entry)
+			} else {
+				c.currentSize -= entry.size
 			}
 		}
 
@@ -225,13 +321,89 @@ func (c *Cache) getAllEntries(filterExpired bool) map[string][]*Data {
 }
 
 // ImportEntry adds an entry directly (used for sync, skips TTL cleanup)
-func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Time) {
+// Returns error if the entry is larger than the max cache size
+func (c *Cache) ImportEntry(key string, value *structpb.Value, timestamp time.Time) error {
+	entrySize := estimateSize(value)
+
+	// Reject entries larger than max cache size
+	if c.maxSize > 0 && entrySize > c.maxSize {
+		logs.Warnf("rejecting import for key %q: size %d exceeds max cache size %d", key, entrySize, c.maxSize)
+		return ErrEntryTooLarge
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// Evict old entries if we would exceed max size
+	if c.maxSize > 0 {
+		c.evictIfNeededLocked(entrySize)
+	}
 
 	data := &Data{
 		Timestamp: timestamp,
 		Value:     value,
+		size:      entrySize,
 	}
 	c.entries[key] = append(c.entries[key], data)
+	c.currentSize += entrySize
+	return nil
+}
+
+// evictIfNeededLocked removes the oldest entries until there's room for newEntrySize
+// Must be called with lock held
+func (c *Cache) evictIfNeededLocked(newEntrySize int64) {
+	targetSize := c.maxSize - newEntrySize
+	if targetSize < 0 {
+		targetSize = 0
+	}
+
+	for c.currentSize > targetSize && len(c.entries) > 0 {
+		// Find the oldest entry across all keys
+		var oldestKey string
+		var oldestIdx int
+		var oldestTime time.Time
+		first := true
+
+		for key, entries := range c.entries {
+			for idx, entry := range entries {
+				if first || entry.Timestamp.Before(oldestTime) {
+					oldestKey = key
+					oldestIdx = idx
+					oldestTime = entry.Timestamp
+					first = false
+				}
+			}
+		}
+
+		if first {
+			// No entries found
+			break
+		}
+
+		// Remove the oldest entry
+		entries := c.entries[oldestKey]
+		evicted := entries[oldestIdx]
+		c.currentSize -= evicted.size
+
+		if len(entries) == 1 {
+			delete(c.entries, oldestKey)
+		} else {
+			c.entries[oldestKey] = append(entries[:oldestIdx], entries[oldestIdx+1:]...)
+		}
+
+		logs.Infof("evicted cache entry for key %q (age: %v) to make room, current size: %d/%d bytes",
+			oldestKey, time.Since(oldestTime), c.currentSize, c.maxSize)
+	}
+}
+
+// GetCurrentSize returns the current cache size in bytes
+func (c *Cache) GetCurrentSize() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.currentSize
+}
+
+// GetMaxSize returns the maximum cache size in bytes (0 = unlimited)
+func (c *Cache) GetMaxSize() int64 {
+	return c.maxSize
 }

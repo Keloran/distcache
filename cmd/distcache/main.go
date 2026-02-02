@@ -39,7 +39,8 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	}
 
 	type CacheConfig struct {
-		TTL time.Duration `env:"CACHE_TTL" envDefault:"5m"`
+		TTL     time.Duration `env:"CACHE_TTL" envDefault:"5m"`
+		MaxSize string        `env:"CACHE_MAX_SIZE" envDefault:"10mb"` // e.g., "10mb", "1g", "32t", "0" for unlimited
 	}
 
 	var service ServiceConfig
@@ -77,6 +78,7 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	cfg.ProjectProperties.Set("search_ip_ranges", search.IPRanges)
 	cfg.ProjectProperties.Set("search_scan_own_range", search.ScanOwnRange)
 	cfg.ProjectProperties.Set("cache_ttl", cacheConf.TTL)
+	cfg.ProjectProperties.Set("cache_max_size", cacheConf.MaxSize)
 	cfg.ProjectProperties.Set("search_active_discovery_duration", search.ActiveDiscoveryDuration)
 	if search.PortRangeEnd > 0 {
 		cfg.ProjectProperties.Set("search_port_range_end", search.PortRangeEnd)

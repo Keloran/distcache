@@ -42,7 +42,19 @@ func New(cfg *ConfigBuilder.Config) *Service {
 	if v, ok := cfg.ProjectProperties["cache_ttl"].(time.Duration); ok {
 		ttl = v
 	}
-	cacheSystem := cache.NewCache(ttl)
+
+	// Get cache max size from config
+	maxSize := cache.DefaultMaxSize
+	if v, ok := cfg.ProjectProperties["cache_max_size"].(string); ok && v != "" {
+		parsed, err := cache.ParseSize(v)
+		if err != nil {
+			logs.Warnf("invalid cache_max_size %q, using default %d bytes: %v", v, cache.DefaultMaxSize, err)
+		} else {
+			maxSize = parsed
+			logs.Infof("cache max size set to %d bytes", maxSize)
+		}
+	}
+	cacheSystem := cache.NewCacheWithMaxSize(ttl, maxSize)
 
 	svc := &Service{
 		Config:   cfg,
@@ -218,9 +230,12 @@ func (s *Service) SetCache(ctx context.Context, req *pb.SetCacheRequest) (*pb.Se
 
 	// Store locally
 	cacheSystem := cache.New(s.Config, req.Key, s.Cache)
-	cacheSystem.CreateEntryWithTimestamp(req.Value, timestamp)
-
-	logs.Infof("cached key %q (from_replication=%v)", req.Key, req.FromReplication)
+	if err := cacheSystem.CreateEntryWithTimestamp(req.Value, timestamp); err != nil {
+		logs.Warnf("failed to cache key %q: %v", req.Key, err)
+		return &pb.SetCacheResponse{
+			Success: false,
+		}, err
+	}
 
 	// If this is not from replication, replicate to all peers
 	if !req.FromReplication {
@@ -376,15 +391,20 @@ func (s *Service) SyncFromPeer(ctx context.Context, peerAddr string) error {
 
 	// Import all entries
 	imported := 0
+	skipped := 0
 	for _, syncEntry := range resp.Entries {
 		for _, entry := range syncEntry.Values {
 			timestamp := time.Unix(0, entry.TimestampUnixNano)
-			s.Cache.ImportEntry(syncEntry.Key, entry.Value, timestamp)
+			if err := s.Cache.ImportEntry(syncEntry.Key, entry.Value, timestamp); err != nil {
+				logs.Warnf("skipped importing key %q during sync: %v", syncEntry.Key, err)
+				skipped++
+				continue
+			}
 			imported++
 		}
 	}
 
-	logs.Infof("synced cache from peer %s: %d keys, %d entries", peerAddr, resp.TotalKeys, imported)
+	logs.Infof("synced cache from peer %s: %d keys, %d entries imported, %d skipped", peerAddr, resp.TotalKeys, imported, skipped)
 	return nil
 }
 

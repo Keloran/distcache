@@ -388,20 +388,22 @@ func (s *System) tryBroadcast(ctx context.Context, hostname, address string) {
 		return
 	}
 
-	// Add to registry
+	// Skip ourselves - the peer's self-reported address will match our selfAddress
+	// This works even in dev mode because both use hostname:port format
+	if broadcastResp.Address == s.selfAddress {
+		return
+	}
+
+	// In development mode, use the address we actually connected to (e.g., 127.0.0.1:42069)
+	// rather than the peer's self-reported address (e.g., hostname:42069) which may not resolve
 	peerAddr := broadcastResp.Address
-	if peerAddr == "" {
+	if peerAddr == "" || s.Config.Local.Development {
 		peerAddr = address
 	}
 
 	name := broadcastResp.Name
 	if name == "" {
 		name = hostname
-	}
-
-	// Skip ourselves
-	if s.shouldSkipAddress(peerAddr) {
-		return
 	}
 
 	isNewPeer := !s.Registry.Exists(peerAddr)
