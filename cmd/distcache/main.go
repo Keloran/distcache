@@ -27,6 +27,7 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 		ServiceName             string        `env:"SERVICE_NAME" envDefault:"distcache"`
 		Domains                 []string      `env:"SERVICE_DOMAINS" envSeparator:"," envDefault:".internal"`
 		Port                    int           `env:"SERVICE_PORT" envDefault:"42069"`
+		PortRangeEnd            int           `env:"SERVICE_PORT_RANGE_END" envDefault:"0"` // 0 means use Port + 10
 		ScanInterval            time.Duration `env:"SERVICE_SCAN_INTERVAL" envDefault:"30s"`
 		Timeout                 time.Duration `env:"SERVICE_TIMEOUT" envDefault:"5s"`
 		MaxInstances            int           `env:"SERVICE_MAX_INSTANCES" envDefault:"100"`
@@ -76,6 +77,9 @@ func (pc ProjectConfig) Build(cfg *ConfigBuilder.Config) error {
 	cfg.ProjectProperties["search_ip_ranges"] = search.IPRanges
 	cfg.ProjectProperties["search_scan_own_range"] = search.ScanOwnRange
 	cfg.ProjectProperties["search_active_discovery_duration"] = search.ActiveDiscoveryDuration
+	if search.PortRangeEnd > 0 {
+		cfg.ProjectProperties["search_port_range_end"] = search.PortRangeEnd
+	}
 
 	// Cache properties
 	cfg.ProjectProperties["cache_ttl"] = cacheConf.TTL

@@ -83,13 +83,17 @@ func (r *Registry) UpdateLastSeen(address string) {
 	}
 }
 
-func (r *Registry) MarkUnhealthy(address string) {
+// MarkUnhealthy marks a peer as unhealthy and returns true if the status changed
+func (r *Registry) MarkUnhealthy(address string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if peer, ok := r.peers[address]; ok {
+		wasHealthy := peer.Healthy
 		peer.Healthy = false
+		return wasHealthy // true if status changed from healthy to unhealthy
 	}
+	return false
 }
 
 func (r *Registry) Count() int {

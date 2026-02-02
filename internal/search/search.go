@@ -109,6 +109,14 @@ func (s *System) getScanOwnRange() bool {
 	return false
 }
 
+func (s *System) getPortRangeEnd() int {
+	if v, ok := s.Config.ProjectProperties["search_port_range_end"].(int); ok {
+		return v
+	}
+	// Default: scan ports 42069-42079 (10 ports)
+	return s.getPort() + 10
+}
+
 func (s *System) getActiveDiscoveryDuration() time.Duration {
 	if v, ok := s.Config.ProjectProperties["search_active_discovery_duration"].(time.Duration); ok {
 		return v
@@ -242,7 +250,8 @@ func (s *System) FindOthers(ctx context.Context) {
 
 	// Probe IP ranges (must be private ranges only)
 	ipRanges := s.getIPRanges()
-	port := s.getPort()
+	portStart := s.getPort()
+	portEnd := s.getPortRangeEnd()
 
 	// If scan_own_range is enabled, add the server's own /24 range
 	if s.getScanOwnRange() {
@@ -269,16 +278,19 @@ func (s *System) FindOthers(ctx context.Context) {
 		}
 
 		for _, ip := range ips {
-			wg.Add(1)
-			go func(ipAddr net.IP) {
-				defer wg.Done()
-				address := fmt.Sprintf("%s:%d", ipAddr.String(), port)
-				// Skip ourselves
-				if address == s.selfAddress {
-					return
-				}
-				s.tryBroadcast(ctx, ipAddr.String(), address)
-			}(ip)
+			// Scan port range (default 42069-42079)
+			for port := portStart; port <= portEnd; port++ {
+				wg.Add(1)
+				go func(ipAddr net.IP, p int) {
+					defer wg.Done()
+					address := fmt.Sprintf("%s:%d", ipAddr.String(), p)
+					// Skip ourselves
+					if address == s.selfAddress {
+						return
+					}
+					s.tryBroadcast(ctx, ipAddr.String(), address)
+				}(ip, port)
+			}
 		}
 	}
 
@@ -416,8 +428,9 @@ func (s *System) healthCheck(ctx context.Context) {
 				grpc.WithTransportCredentials(insecure.NewCredentials()),
 			)
 			if err != nil {
-				s.Registry.MarkUnhealthy(p.Address)
-				logs.Infof("peer %s is unhealthy: %v", p.Address, err)
+				if s.Registry.MarkUnhealthy(p.Address) {
+					logs.Infof("peer %s is now unhealthy: %v", p.Address, err)
+				}
 				return
 			}
 			defer func() {
@@ -429,8 +442,9 @@ func (s *System) healthCheck(ctx context.Context) {
 			client := pb.NewCacheServiceClient(conn)
 			_, err = client.Broadcast(ctx, &pb.BroadcastRequest{})
 			if err != nil {
-				s.Registry.MarkUnhealthy(p.Address)
-				logs.Infof("peer %s is unhealthy: %v", p.Address, err)
+				if s.Registry.MarkUnhealthy(p.Address) {
+					logs.Infof("peer %s is now unhealthy: %v", p.Address, err)
+				}
 				return
 			}
 
