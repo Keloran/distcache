@@ -19,6 +19,7 @@ import (
 	ConfigBuilder "github.com/keloran/go-config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -186,7 +187,7 @@ func (s *Service) shutdown(_ context.Context) error {
 
 // Broadcast implements the gRPC Broadcast RPC
 // When a peer calls Broadcast, we register them in our registry (mutual registration)
-func (s *Service) Broadcast(_ context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
+func (s *Service) Broadcast(ctx context.Context, req *pb.BroadcastRequest) (*pb.BroadcastResponse, error) {
 	// Register the caller if they provided their info
 	if req.CallerAddress != "" && req.CallerAddress != s.selfAddress {
 		name := req.CallerName
@@ -194,10 +195,29 @@ func (s *Service) Broadcast(_ context.Context, req *pb.BroadcastRequest) (*pb.Br
 			name = req.CallerAddress
 		}
 
-		if !s.Registry.Exists(req.CallerAddress) {
-			logs.Infof("registered peer from broadcast: %s at %s", name, req.CallerAddress)
+		// Determine the address to use for this peer
+		peerAddr := req.CallerAddress
+
+		// In development mode, use the actual connection address instead of the
+		// self-reported address, since hostname resolution may not work locally
+		if s.Config.Local.Development {
+			if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+				// p.Addr is like "127.0.0.1:54321" (includes ephemeral port)
+				// We need to combine the caller's IP with the port from CallerAddress
+				connAddr := p.Addr.String()
+				if host, _, err := net.SplitHostPort(connAddr); err == nil {
+					// Extract port from CallerAddress (e.g., "hostname:42070" -> "42070")
+					if _, port, err := net.SplitHostPort(req.CallerAddress); err == nil {
+						peerAddr = net.JoinHostPort(host, port)
+					}
+				}
+			}
 		}
-		s.Registry.Add(req.CallerAddress, name)
+
+		if !s.Registry.Exists(peerAddr) {
+			logs.Infof("registered peer from broadcast: %s at %s", name, peerAddr)
+		}
+		s.Registry.Add(peerAddr, name)
 	}
 
 	return &pb.BroadcastResponse{
@@ -281,9 +301,9 @@ func (s *Service) replicateToPeers(ctx context.Context, key string, value *struc
 	}
 
 	var wg sync.WaitGroup
-	for _, peer := range peers {
+	for _, p := range peers {
 		// Skip ourselves
-		if peer.Address == s.selfAddress {
+		if p.Address == s.selfAddress {
 			continue
 		}
 
@@ -295,7 +315,7 @@ func (s *Service) replicateToPeers(ctx context.Context, key string, value *struc
 				logs.Warnf("failed to replicate to peer %s: %v", addr, err)
 				s.Registry.MarkUnhealthy(addr)
 			}
-		}(peer.Address)
+		}(p.Address)
 	}
 
 	wg.Wait()
